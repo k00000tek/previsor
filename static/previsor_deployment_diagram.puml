@@ -1,0 +1,40 @@
+@startuml
+title Диаграмма развертывания PreVisor
+
+skinparam node {
+  BackgroundColor White
+  BorderColor #666
+  FontColor #111
+}
+
+skinparam artifact {
+  BackgroundColor #F9F9F9
+  BorderColor #999
+}
+
+' === Узлы ===
+node "Клиентская машина\n(Client Device)" as Client {
+    artifact "Веб-браузер\n(Browser)" as Browser
+}
+
+node "Сервер приложений\n(Application Server)" as Server {
+    artifact "Flask-приложение\n(previsor_app.py)" as Flask
+    artifact "Модуль анализа\n(analysis.py)" as Analyzer
+    artifact "Модуль предобработки\n(preprocess.py)" as Preproc
+}
+
+node "Сервер БД\n(Database Server)" as DBServer {
+    artifact "PostgreSQL / SQLite\n(database.db)" as DB
+}
+
+cloud "Внешние сервисы (опционально)\n(Threat Intelligence API)" as Cloud
+
+' === Связи ===
+Browser --> Flask : HTTP(S)\nЗапросы пользователя
+Flask --> Analyzer : API вызовы / ML-анализ
+Analyzer --> Preproc : Предобработка данных
+Analyzer --> DB : Сохранение результатов
+Flask --> DB : Запрос данных для визуализации
+Analyzer .-> Cloud : Проверка IP / контента (опционально)
+
+@enduml

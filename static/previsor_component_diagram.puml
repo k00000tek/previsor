@@ -1,0 +1,59 @@
+@startuml
+title Диаграмма компонентов PreVisor
+
+' === Стили ===
+skinparam componentStyle rectangle
+skinparam rectangle {
+  BackgroundColor White
+  BorderColor #777
+  FontColor Black
+}
+skinparam package {
+  BackgroundColor #F9F9F9
+  BorderColor #999
+}
+skinparam database {
+  BackgroundColor #FFF9F2
+  BorderColor #CCAA77
+}
+skinparam cloud {
+  BackgroundColor #F5FAFF
+  BorderColor #8FB6E6
+}
+
+' === Группы компонентов ===
+package "Core System" {
+  [Data Collection]
+  [Preprocessing]
+
+  package "Threat Analysis" {
+    [DDoS Detector]
+    [Port Analyzer]
+  }
+}
+
+package "Presentation Layer" {
+  [Web Dashboard]
+}
+
+database "Data Storage" {
+  [PostgreSQL / SQLite]
+}
+
+cloud "External Services (Optional)" {
+  [Threat Intelligence API]
+}
+
+' === Связи ===
+[Data Collection] --> [Preprocessing] : Raw data
+[Preprocessing] --> [DDoS Detector] : Feature set
+[Preprocessing] --> [Port Analyzer] : Feature set
+[DDoS Detector] --> [PostgreSQL / SQLite] : Logs & Alerts
+[Port Analyzer] --> [PostgreSQL / SQLite] : Logs & Alerts
+[Web Dashboard] --> [PostgreSQL / SQLite] : Queries / Reports
+[Web Dashboard] --> [Threat Analysis] : Manual trigger
+[DDoS Detector] --> [Web Dashboard] : Alerts / Results
+[Port Analyzer] --> [Web Dashboard] : Scan reports
+[DDoS Detector] --> [Threat Intelligence API] : Optional check
+
+@enduml

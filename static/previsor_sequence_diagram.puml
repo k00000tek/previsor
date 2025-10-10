@@ -1,0 +1,40 @@
+@startuml
+title Диаграмма последовательности PreVisor: Автоматический мониторинг и ручной анализ
+
+actor "Пользователь" as User
+participant "Flask UI\n(Веб-интерфейс)" as Flask
+participant "Сборщик данных\n(DataCollector)" as DC
+participant "Предобработка\n(Preprocessor)" as PP
+participant "Анализатор\n(Analyzer)" as AN
+participant "База данных\n(DB)" as DB
+participant "Внешний API\n(Threat Intelligence)" as EXT
+
+loop Каждые 10 минут
+  DC -> DC : collectTraffic()\nСбор трафика
+  DC -> PP : preprocessData(raw_logs)\nПередача логов
+  PP -> AN : analyze(features)\nЗапуск анализа
+  note right of AN : Задержка 5–10 сек\nна ML-инференс
+  alt Угроза обнаружена
+    AN -> DB : insertAlert(alert_json)\nСохранить алерт
+    AN -[#gray,dashed]-> Flask : notifyAlert(alert)\nУведомление интерфейса
+    AN -> EXT : checkIP(ip)\nПроверка репутации (опционально)
+  else Нет угроз
+    AN -> DB : insertLog(clean_results)\nСохранить логи
+  end
+end
+
+User -> Flask : requestDashboard()\nОткрыть дашборд
+Flask -> DB : getAlerts(filters)\nЗапрос алертов
+DB --> Flask : list_alerts\nРезультаты
+Flask --> User : renderDashboard(alerts)\nОтображение данных
+
+opt Ручной запуск анализа
+  User -> Flask : triggerAnalysis(upload/file)\nЗапустить анализ вручную
+  Flask -> PP : preprocess(file)\nПредобработка файла
+  PP -> AN : analyze(features)\nML-анализ
+  AN -> DB : insertAlert()\nСохранить результат
+  AN -[#gray,dashed]-> Flask : notifyAlert(alert)\nУведомить пользователя
+  Flask --> User : showNewAlert()\nПоказать новый алерт
+end
+
+@enduml
