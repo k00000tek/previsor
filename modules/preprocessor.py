@@ -3,6 +3,7 @@ from sklearn.preprocessing import MinMaxScaler, StandardScaler, LabelEncoder, On
 from sklearn.model_selection import train_test_split
 import logging
 import os
+import joblib
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -29,19 +30,52 @@ def preprocess_data(input_file: str, output_dir: str = 'data', scaler_type: str 
         http_cols = ohe.get_feature_names_out(['http_method'])
         df = pd.concat([df.drop('http_method', axis=1), pd.DataFrame(http_encoded, columns=http_cols, index=df.index)], axis=1)
         logging.info("OneHotEncoding для http_method завершено")
-    if 'label' in df:
-        le = LabelEncoder()
-        df['label_encoded'] = le.fit_transform(df['label'])
-        logging.info("LabelEncoding для label завершено")
 
+    # Автоопределение колонки с меткой
+    label_col = None
+    for col in ['label', 'Label', 'Attack Type', 'classification']:
+        if col in df.columns:
+            label_col = col
+            break
+
+    if label_col:
+        le = LabelEncoder()
+        df['label_encoded'] = le.fit_transform(df[label_col])
+        # Сохраняем encoder для analyzer
+        joblib.dump(le, 'models/label_encoder.pkl')
+        logging.info(f"LabelEncoding для '{label_col}' завершено")
+    else:
+        logging.warning("Колонка с меткой не найдена. Анализ без label.")
+
+
+    # === УДАЛЯЕМ исходную колонку с меткой ===
+    df = df.drop(columns=[label_col], errors='ignore')
+
+    # === МАСШТАБИРОВАНИЕ ТОЛЬКО ЧИСЛОВЫХ ПРИЗНАКОВ (БЕЗ label_encoded!) ===
     # Масштабирование числовых признаков
+    # numeric_cols = df.select_dtypes(include=['int64', 'float64']).columns
+    # numeric_cols = numeric_cols.drop('label_encoded', errors='ignore')  # Исключаем label_encoded
+
+    # === УДАЛЕНИЕ НЕЧИСЛОВЫХ КОЛОНОК ===
+    non_numeric_cols = df.select_dtypes(exclude=['int64', 'float64']).columns
+    df = df.drop(columns=non_numeric_cols, errors='ignore')
+    logging.info(f"Удалены нечисловые колонки: {list(non_numeric_cols)}")
+
+    # === МАСШТАБИРОВАНИЕ ТОЛЬКО ЧИСЛОВЫХ ===
     numeric_cols = df.select_dtypes(include=['int64', 'float64']).columns
+    numeric_cols = numeric_cols.drop('label_encoded', errors='ignore')
+
     if scaler_type == 'minmax':
         scaler = MinMaxScaler()
     else:
         scaler = StandardScaler()
-    df[numeric_cols] = scaler.fit_transform(df[numeric_cols])
-    logging.info(f"Масштабирование ({scaler_type}) для {len(numeric_cols)} числовых колонок")
+
+    if len(numeric_cols) > 0:
+        df[numeric_cols] = scaler.fit_transform(df[numeric_cols])
+        logging.info(f"Масштабирование (minmax) для {len(numeric_cols)} числовых колонок")
+    else:
+        logging.warning("Нет числовых колонок для масштабирования")
+
 
     # Feature engineering (как было + унификация)
     if 'flow_duration' in df and 'packet_count' in df:
@@ -59,9 +93,9 @@ def preprocess_data(input_file: str, output_dir: str = 'data', scaler_type: str 
         X = df.drop(['label', 'label_encoded'], axis=1, errors='ignore')  # Features
         y = df['label_encoded']  # Label
     else:
-        X = df
+        X = df.copy()
         y = None
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42) if y is not None else (None, None, None, None)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42, stratify=y) if y is not None else (None, None, None, None)
     logging.info(f"Train/test split: {len(X_train) if X_train is not None else 0} / {len(X_test) if X_test is not None else 0} строк")
 
     return {'X_train': X_train, 'X_test': X_test, 'y_train': y_train, 'y_test': y_test, 'processed_df': df}
