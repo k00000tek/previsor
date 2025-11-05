@@ -51,13 +51,11 @@ def preprocess_data(input_file: str, output_dir: str = 'data', scaler_type: str 
     # === УДАЛЯЕМ исходную колонку с меткой ===
     df = df.drop(columns=[label_col], errors='ignore')
 
-    # === МАСШТАБИРОВАНИЕ ТОЛЬКО ЧИСЛОВЫХ ПРИЗНАКОВ (БЕЗ label_encoded!) ===
-    # Масштабирование числовых признаков
-    # numeric_cols = df.select_dtypes(include=['int64', 'float64']).columns
-    # numeric_cols = numeric_cols.drop('label_encoded', errors='ignore')  # Исключаем label_encoded
-
-    # === УДАЛЕНИЕ НЕЧИСЛОВЫХ КОЛОНОК ===
+    # === УДАЛЕНИЕ НЕЧИСЛОВЫХ КОЛОНОК (но НЕ source_ip!) ===
     non_numeric_cols = df.select_dtypes(exclude=['int64', 'float64']).columns
+    # Оставляем source_ip, даже если он str
+    if 'source_ip' in non_numeric_cols:
+        non_numeric_cols = non_numeric_cols.drop('source_ip')
     df = df.drop(columns=non_numeric_cols, errors='ignore')
     logging.info(f"Удалены нечисловые колонки: {list(non_numeric_cols)}")
 

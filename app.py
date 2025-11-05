@@ -1,10 +1,16 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, render_template
 from modules.data_collector import collect_traffic
 from modules.preprocessor import preprocess_data
 from celery_app import celery
 from modules.analyzer import Analyzer
 from modules.preprocessor import preprocess_data
+from modules.database import save_alert, get_alerts
 import pandas as pd
+import os
+import logging
+
+# Настройка логирования
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 app = Flask(__name__)
 
@@ -14,7 +20,7 @@ def health():
 
 @app.route('/dashboard')
 def dashboard():
-    return 'Dashboard placeholder'
+    return render_template('dashboard.html')
 
 @app.route('/collect', methods=['GET'])
 def collect():
@@ -36,7 +42,7 @@ def analyze_endpoint():
     analyzer = Analyzer(model_type=model_type)
     if model_type == 'xgb':
         analyzer.model_path = 'models/previsor_model_xgb.pkl'
-
+    file_path = None
     try:
         if 'file' in request.files:
             file = request.files['file']
@@ -48,15 +54,23 @@ def analyze_endpoint():
         # Читаем CSV
         df = pd.read_csv(file_path)
 
-        # УДАЛЯЕМ НЕЧИСЛОВЫЕ
-        df = df.select_dtypes(include=['int64', 'float64'])
-        df = df.drop(columns=['label_encoded'], errors='ignore')
+        # Извлекаем source_ip
+        source_ips = df['source_ip'].tolist() if 'source_ip' in df.columns else [None] * len(df)
 
-        X = df.values  # → numpy array
+        # Удаляем нечисловые, кроме source_ip
+        X = df.select_dtypes(include=['int64', 'float64']).drop(columns=['label_encoded'], errors='ignore').values
 
         # Загружаем модель
 
-        alerts = analyzer.analyze(X)
+        alerts = analyzer.analyze(X, source_ips=source_ips)
+
+        for alert in alerts:
+            if alert['alert']:
+                save_alert(
+                    alert_type=alert['type'],
+                    probability=alert['probability'],
+                    source_ip=alert.get('source_ip')
+                )
 
         return jsonify({
             'status': 'Анализ завершён',
@@ -66,6 +80,27 @@ def analyze_endpoint():
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+    finally:
+        if file_path and file_path.startswith('data/uploaded_'):
+            try:
+                os.remove(file_path)
+                logging.info(f"Удалён временный файл: {file_path}")
+            except:
+                pass
+
+@app.route('/alerts')
+def alerts_api():
+    alert_type = request.args.get('type')
+    limit = int(request.args.get('limit', 50))
+    alerts = get_alerts(alert_type=alert_type, limit=limit)
+    return jsonify([{
+        'id': a.id,
+        'timestamp': a.timestamp.isoformat(),
+        'type': a.alert_type,
+        'probability': a.probability,
+        'source_ip': a.source_ip,
+        'status': a.status
+    } for a in alerts])
 
 if __name__ == '__main__':
     app.run(debug=True)

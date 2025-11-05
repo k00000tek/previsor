@@ -7,6 +7,7 @@ import joblib
 import logging
 import os
 from datetime import datetime
+from utils.api_integration import enrich_alert_with_reputation
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -58,7 +59,7 @@ class Analyzer:
         logging.info(f"Отчёт сохранён: {self.report_path}")
         return {'f1_score': f1, 'report': report}
 
-    def analyze(self, X) -> dict:
+    def analyze(self, X, source_ips=None) -> list:
         """Инференс: предсказание угрозы."""
         if self.model is None:
             self.load_model()
@@ -72,8 +73,10 @@ class Analyzer:
 
         alerts = []
         for i, (p, prob) in enumerate(zip(pred, max_prob)):
+            ip = source_ips[i] if source_ips and i < len(source_ips) else None
+            enriched_prob = enrich_alert_with_reputation(self._decode_label(p), prob, ip)
             alert = {
-                'alert': int(prob > 0.7),  # Порог
+                'alert': int(prob > 0.95),  # Порог
                 'type': self._decode_label(p),
                 'probability': float(prob),
                 'timestamp': datetime.now().isoformat()

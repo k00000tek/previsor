@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>PreVisor Dashboard</title>
+  <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body { padding: 20px; }
+    .card { margin-bottom: 20px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1 class="mb-4">PreVisor — Мониторинг угроз</h1>
+
+    <!-- Кнопка анализа -->
+    <div class="mb-3">
+      <input type="file" id="fileInput" class="form-control" style="display:inline-block; width:auto;">
+      <button onclick="runAnalysis()" class="btn btn-primary">Запустить анализ</button>
+    </div>
+
+    <div class="row">
+      <!-- График по типам -->
+      <div class="col-md-6">
+        <div class="card">
+          <div class="card-header">Алерты по типу</div>
+          <div class="card-body">
+            <div id="typeChart"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- График по времени -->
+      <div class="col-md-6">
+        <div class="card">
+          <div class="card-header">Алерты по времени</div>
+          <div class="card-body">
+            <div id="timeChart"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Таблица алертов -->
+    <div class="card mt-4">
+      <div class="card-header">
+        Последние алерты
+        <select id="filterType" onchange="loadAlerts()" class="form-select" style="width:auto; display:inline-block;">
+          <option value="">Все типы</option>
+        </select>
+      </div>
+      <div class="card-body">
+        <table class="table table-sm">
+          <thead><tr><th>ID</th><th>Время</th><th>Тип</th><th>Вероятность</th><th>IP</th></tr></thead>
+          <tbody id="alertsTable"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    async function loadAlerts() {
+      const type = document.getElementById('filterType').value;
+      const res = await fetch(`/alerts?type=${type}&limit=50`);
+      const alerts = await res.json();
+
+      // Заполняем таблицу
+      const tbody = document.getElementById('alertsTable');
+      tbody.innerHTML = alerts.map(a => `
+        <tr>
+          <td>${a.id}</td>
+          <td>${new Date(a.timestamp).toLocaleString()}</td>
+          <td><span class="badge bg-danger">${a.type}</span></td>
+          <td>${(a.probability*100).toFixed(1)}%</td>
+          <td>${a.source_ip || '-'}</td>
+        </tr>
+      `).join('');
+
+      // Обновляем графики
+      updateCharts(alerts);
+      updateFilterOptions(alerts);
+    }
+
+    function updateCharts(alerts) {
+      // По типу
+      const types = {};
+      alerts.forEach(a => types[a.type] = (types[a.type] || 0) + 1);
+      Plotly.newPlot('typeChart', [{
+        x: Object.keys(types),
+        y: Object.values(types),
+        type: 'bar'
+      }], {title: 'Алерты по типу'});
+
+      // По времени
+      const times = {};
+      alerts.forEach(a => {
+        const hour = new Date(a.timestamp).getHours();
+        times[hour] = (times[hour] || 0) + 1;
+      });
+      Plotly.newPlot('timeChart', [{
+        x: Object.keys(times),
+        y: Object.values(times),
+        type: 'bar'
+      }], {title: 'Алерты по часам'});
+    }
+
+    function updateFilterOptions(alerts) {
+      const types = [...new Set(alerts.map(a => a.type))];
+      const select = document.getElementById('filterType');
+      select.innerHTML = '<option value="">Все типы</option>' +
+        types.map(t => `<option value="${t}">${t}</option>`).join('');
+    }
+
+    async function runAnalysis() {
+      const file = document.getElementById('fileInput').files[0];
+      if (!file) return alert('Выберите файл');
+
+      const form = new FormData();
+      form.append('file', file);
+
+      const res = await fetch('/analyze', { method: 'POST', body: form });
+      const data = await res.json();
+      alert(`Найдено алертов: ${data.alerts_found}`);
+      loadAlerts();
+    }
+
+    // Загрузка при старте
+    loadAlerts();
+  </script>
+</body>
+</html>

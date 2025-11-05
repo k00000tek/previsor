@@ -1,43 +1,56 @@
-import sqlite3
-import pandas as pd
-from config import DB_PATH
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+from datetime import datetime
 import os
 
-def init_db():
-    """Инициализация БД."""
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS traffic_logs (
-            id INTEGER PRIMARY KEY,
-            timestamp DATETIME,
-            source_ip TEXT,
-            dest_port INTEGER,
-            packet_count INTEGER,
-            http_method TEXT,
-            label TEXT
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS alerts (
-            id INTEGER PRIMARY KEY,
-            timestamp DATETIME,
-            alert_type TEXT,
-            probability FLOAT,
-            description TEXT
-        )
-    ''')
-    conn.commit()
-    conn.close()
-    print("БД инициализирована:", DB_PATH)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, '..', 'db', 'previsor.db')
+os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 
-def insert_logs(df: pd.DataFrame):
-    """Вставка логов в БД."""
-    conn = sqlite3.connect(DB_PATH)
-    df.to_sql('traffic_logs', conn, if_exists='append', index=False)
-    conn.close()
-    print("Логи вставлены в БД.")
+engine = create_engine(f'sqlite:///{DB_PATH}', echo=False)
+SessionLocal = sessionmaker(bind=engine)
+Base = declarative_base()
 
-if __name__ == "__main__":
-    init_db()
+
+class Alert(Base):
+    __tablename__ = 'alerts'
+
+    id = Column(Integer, primary_key=True)
+    timestamp = Column(DateTime, default=datetime.utcnow)
+    alert_type = Column(String, nullable=False)
+    probability = Column(Float, nullable=False)
+    source_ip = Column(String)
+    status = Column(String, default='new')  # new, acknowledged, false_positive
+
+
+Base.metadata.create_all(engine)
+
+
+def save_alert(alert_type, probability, source_ip=None):
+    session = SessionLocal()
+    try:
+        alert = Alert(
+            alert_type=alert_type,
+            probability=probability,
+            source_ip=source_ip
+        )
+        session.add(alert)
+        session.commit()
+        return alert.id
+    except Exception as e:
+        session.rollback()
+        raise e
+    finally:
+        session.close()
+
+
+def get_alerts(alert_type=None, limit=50, offset=0):
+    session = SessionLocal()
+    try:
+        query = session.query(Alert).order_by(Alert.timestamp.desc())
+        if alert_type:
+            query = query.filter(Alert.alert_type == alert_type)
+        return query.offset(offset).limit(limit).all()
+    finally:
+        session.close()

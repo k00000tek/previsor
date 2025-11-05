@@ -8,3 +8,5 @@ utils/tmp_kaggle/
 *.bak
 *.dat
 *.dir
+.env
+*.db
