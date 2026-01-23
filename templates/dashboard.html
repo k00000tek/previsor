@@ -125,6 +125,9 @@
       loadAlerts();
     }
 
+    // Автообновление каждые 30 сек
+    setInterval(loadAlerts, 30000);
+
     // Загрузка при старте
     loadAlerts();
   </script>

@@ -1,6 +1,5 @@
 from flask import Flask, jsonify, request, render_template
 from modules.data_collector import collect_traffic
-from modules.preprocessor import preprocess_data
 from celery_app import celery
 from modules.analyzer import Analyzer
 from modules.preprocessor import preprocess_data
@@ -46,10 +45,11 @@ def analyze_endpoint():
     try:
         if 'file' in request.files:
             file = request.files['file']
-            file_path = f"data/uploaded_{file.filename}"
+            file_path = os.path.join('data', f"uploaded_{file.filename}")
             file.save(file_path)
         else:
-            file_path = 'data/collected_traffic_processed.csv'
+            # Пытаемся взять путь из query-параметра
+            file_path = request.args.get('file', 'data/collected_traffic_processed.csv')
 
         # Читаем CSV
         df = pd.read_csv(file_path)
@@ -58,11 +58,10 @@ def analyze_endpoint():
         source_ips = df['source_ip'].tolist() if 'source_ip' in df.columns else [None] * len(df)
 
         # Удаляем нечисловые, кроме source_ip
-        X = df.select_dtypes(include=['int64', 'float64']).drop(columns=['label_encoded'], errors='ignore').values
+        X = df.select_dtypes(include=['int64', 'float64']).drop(columns=['label_encoded'], errors='ignore')
 
         # Загружаем модель
-
-        alerts = analyzer.analyze(X, source_ips=source_ips)
+        alerts = analyzer.analyze(X.values, source_ips=source_ips)
 
         for alert in alerts:
             if alert['alert']:

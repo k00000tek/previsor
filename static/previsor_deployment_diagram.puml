@@ -17,24 +17,41 @@ node "Клиентская машина\n(Client Device)" as Client {
     artifact "Веб-браузер\n(Browser)" as Browser
 }
 
-node "Сервер приложений\n(Application Server)" as Server {
-    artifact "Flask-приложение\n(previsor_app.py)" as Flask
-    artifact "Модуль анализа\n(analysis.py)" as Analyzer
-    artifact "Модуль предобработки\n(preprocess.py)" as Preproc
+node "Сервер приложений\n(Application Server)" as AppServer {
+    artifact "Flask-приложение\n(app.py)" as FlaskApp
+    artifact "Модули анализа\n(modules/analyzer.py,\nmodules/anomaly_detector.py)" as AnalyzerMods
+    artifact "Модуль предобработки\n(modules/preprocessor.py)" as PreprocMod
+    artifact "Сборщик трафика\n(modules/data_collector.py)" as CollectorMod
+    artifact "Celery-воркер\n(celery_app.py)" as CeleryApp
 }
 
 node "Сервер БД\n(Database Server)" as DBServer {
-    artifact "PostgreSQL / SQLite\n(database.db)" as DB
+    artifact "SQLite / PostgreSQL\n(db/previsor.db)" as DB
 }
 
-cloud "Внешние сервисы (опционально)\n(Threat Intelligence API)" as Cloud
+node "Сервер брокера\n(Message Broker)" as Broker {
+    artifact "Redis\n(redis-server)" as Redis
+}
+
+cloud "Внешние сервисы\n(Threat Intelligence / уведомления)" as Cloud {
+    artifact "AbuseIPDB / VirusTotal\nHTTP API" as TI
+    artifact "SMTP / Slack / др.\nуведомления" as Notif
+}
 
 ' === Связи ===
-Browser --> Flask : HTTP(S)\nЗапросы пользователя
-Flask --> Analyzer : API вызовы / ML-анализ
-Analyzer --> Preproc : Предобработка данных
-Analyzer --> DB : Сохранение результатов
-Flask --> DB : Запрос данных для визуализации
-Analyzer .-> Cloud : Проверка IP / контента (опционально)
+Browser --> FlaskApp : HTTP(S)\nзапросы пользователя
+FlaskApp --> DB : SQL-запросы\n(alerts, ip_cache, logs)
+FlaskApp --> AnalyzerMods : вызовы функций анализа\n(ручной запуск)
+
+CeleryApp --> CollectorMod : плановый сбор трафика
+CeleryApp --> PreprocMod : плановая предобработка
+CeleryApp --> AnalyzerMods : плановый анализ
+
+AnalyzerMods --> DB : сохранение алертов и логов
+AnalyzerMods --> TI : запрос репутации IP
+AnalyzerMods --> Notif : отправка уведомлений
+
+CeleryApp --> Redis : обмен заданиями\n(Celery broker)
+FlaskApp --> Redis : постановка задач\n(при необходимости)
 
 @enduml

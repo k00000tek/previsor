@@ -1,7 +1,6 @@
 @startuml
 title Диаграмма компонентов PreVisor
 
-' === Стили ===
 skinparam componentStyle rectangle
 skinparam rectangle {
   BackgroundColor White
@@ -21,39 +20,55 @@ skinparam cloud {
   BorderColor #8FB6E6
 }
 
-' === Группы компонентов ===
 package "Core System" {
-  [Data Collection]
-  [Preprocessing]
+  [Data Collector\n(modules.data_collector)]
+  [Preprocessor\n(modules.preprocessor)]
 
   package "Threat Analysis" {
-    [DDoS Detector]
-    [Port Analyzer]
+    [Classifier Analyzer\n(modules.analyzer)]
+    [Anomaly Detector\n(modules.anomaly_detector)]
+    [API Integration\n(utils.api_integration)]
   }
 }
 
 package "Presentation Layer" {
-  [Web Dashboard]
+  [Flask Web App\n(app.py, templates/dashboard.html)]
 }
 
 database "Data Storage" {
-  [PostgreSQL / SQLite]
+  [SQLite DB\n(db/previsor.db)]
+}
+
+package "Background Tasks" {
+  [Celery Worker\n(celery_app.py)]
 }
 
 cloud "External Services (Optional)" {
-  [Threat Intelligence API]
+  [Threat Intelligence API\n(AbuseIPDB, VirusTotal)]
+  [Notification Channels\n(SMTP, Slack, etc.)]
 }
 
 ' === Связи ===
-[Data Collection] --> [Preprocessing] : Raw data
-[Preprocessing] --> [DDoS Detector] : Feature set
-[Preprocessing] --> [Port Analyzer] : Feature set
-[DDoS Detector] --> [PostgreSQL / SQLite] : Logs & Alerts
-[Port Analyzer] --> [PostgreSQL / SQLite] : Logs & Alerts
-[Web Dashboard] --> [PostgreSQL / SQLite] : Queries / Reports
-[Web Dashboard] --> [Threat Analysis] : Manual trigger
-[DDoS Detector] --> [Web Dashboard] : Alerts / Results
-[Port Analyzer] --> [Web Dashboard] : Scan reports
-[DDoS Detector] --> [Threat Intelligence API] : Optional check
+[Data Collector\n(modules.data_collector)] --> [Preprocessor\n(modules.preprocessor)] : raw traffic
+[Preprocessor\n(modules.preprocessor)] --> [Classifier Analyzer\n(modules.analyzer)] : feature matrix
+[Preprocessor\n(modules.preprocessor)] --> [Anomaly Detector\n(modules.anomaly_detector)] : feature matrix
+
+[Classifier Analyzer\n(modules.analyzer)] --> [SQLite DB\n(db/previsor.db)] : alerts
+[Anomaly Detector\n(modules.anomaly_detector)] --> [SQLite DB\n(db/previsor.db)] : anomaly alerts
+[API Integration\n(utils.api_integration)] --> [SQLite DB\n(db/previsor.db)] : ip_cache
+
+[Flask Web App\n(app.py, templates/dashboard.html)] --> [SQLite DB\n(db/previsor.db)] : read alerts/logs
+[Flask Web App\n(app.py, templates/dashboard.html)] --> [Classifier Analyzer\n(modules.analyzer)] : manual analysis request
+
+[Classifier Analyzer\n(modules.analyzer)] --> [API Integration\n(utils.api_integration)] : check IP reputation
+[API Integration\n(utils.api_integration)] --> [Threat Intelligence API\n(AbuseIPDB, VirusTotal)] : HTTP requests
+
+[Celery Worker\n(celery_app.py)] --> [Data Collector\n(modules.data_collector)] : scheduled collect
+[Celery Worker\n(celery_app.py)] --> [Preprocessor\n(modules.preprocessor)] : scheduled preprocess
+[Celery Worker\n(celery_app.py)] --> [Classifier Analyzer\n(modules.analyzer)] : scheduled analysis
+
+[Classifier Analyzer\n(modules.analyzer)] --> [Notification Channels\n(SMTP, Slack, etc.)] : alerts / notify
+
+[Flask Web App\n(app.py, templates/dashboard.html)] --> [Notification Channels\n(SMTP, Slack, etc.)] : optional user actions
 
 @enduml

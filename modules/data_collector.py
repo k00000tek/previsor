@@ -23,7 +23,12 @@ def collect_real_traffic(num_packets=PACKET_COUNT_PER_COLLECTION) -> pd.DataFram
         if IP in pkt:
             timestamp = time.time()
             source_ip = pkt[IP].src
-            dest_port = pkt[IP].sport if TCP in pkt or UDP in pkt else None
+            if TCP in pkt:
+                dest_port = pkt[TCP].dport
+            elif UDP in pkt:
+                dest_port = pkt[UDP].dport
+            else:
+                dest_port = None
             packet_count = 1
             http_method = None
             if HTTPRequest in pkt:
@@ -87,24 +92,51 @@ def collect_simulated_traffic(num_packets=100, port_range=(1, 65535), ip_range='
     return df
 
 
-def collect_traffic(mode='simulated', num_packets=100, port_range=(1, 65535), ip_range='192.168.1.',
-                    save_csv=True) -> pd.DataFrame:
-    """Основная функция сбора данных с параметризацией."""
+def collect_traffic(
+        mode='simulated',
+        num_packets=100,
+        port_range=(1, 65535),
+        ip_range='192.168.1.',
+        include_labels=False,
+        save_csv=True
+) -> pd.DataFrame:
+    """
+    Универсальная функция сбора данных.
+
+    mode: 'real', 'simulated', 'test'
+    include_labels: Только для 'simulated' и 'test' — для оценки
+    """
     if mode == 'real':
         df = collect_real_traffic(num_packets)
+        # В реальном режиме — МЕТОК НЕТ
+        if 'label' in df.columns:
+            df = df.drop(columns=['label'])
+
     elif mode == 'simulated':
         df = collect_simulated_traffic(num_packets, port_range, ip_range)
-    elif mode == 'test':
-        df = load_test_data()
-    else:
-        raise ValueError("Неверный режим: используй 'real', 'simulated' или 'test'")
+        # Метки — только если нужно
+        if not include_labels and 'label' in df.columns:
+            df = df.drop(columns=['label'])
 
-    logging.info(f"Собрано {len(df)} записей в режиме {mode}")
+    elif mode == 'test':
+        df = load_test_data()  # из cicids2017_processed.csv
+        if not include_labels and 'label' in df.columns:
+            df = df.drop(columns=['label'])
+
+    else:
+        raise ValueError("mode: 'real', 'simulated' или 'test'")
+
+    # Сохранение
     if save_csv:
-        output_path = os.path.join(DATA_DIR,
-                                   'simulated_traffic.csv' if mode == 'simulated' else 'collected_traffic.csv')
+        filename = {
+            'real': 'collected_traffic.csv',
+            'simulated': 'simulated_traffic.csv',
+            'test': 'test_traffic.csv'
+        }[mode]
+        output_path = os.path.join(DATA_DIR, filename)
         df.to_csv(output_path, index=False)
-        logging.info(f"Данные сохранены в {output_path}")
+        logging.info(f"Данные сохранены: {output_path}")
+
     return df
 
 def load_test_data(dataset_type: str = 'cicids2017') -> pd.DataFrame:

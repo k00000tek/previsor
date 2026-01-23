@@ -16,15 +16,26 @@ def preprocess_data(input_file: str, output_dir: str = 'data', scaler_type: str 
     df = pd.read_csv(input_file)
     logging.info(f"Загружен файл {input_file}: {len(df)} строк")
 
+    # Приводим имена колонок к единому виду
+    rename_map = {
+        'Flow Duration': 'flow_duration',
+        'Flow_Duration': 'flow_duration'
+    }
+    df = df.rename(columns=rename_map)
+
     # Очистка: dropna на ключевых, удаление дубликатов
-    key_cols = ['source_ip', 'dest_port', 'packet_count'] if 'packet_count' in df else ['Flow Duration', 'source_ip']  # Унификация для источников
+    if 'packet_count' in df.columns:
+        key_cols = ['source_ip', 'dest_port', 'packet_count']
+    else:
+        key_cols = ['flow_duration', 'source_ip']
+    # Унификация для источников
     df = df.dropna(subset=key_cols)
     df = df.drop_duplicates()
     df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
     logging.info(f"После очистки: {len(df)} строк")
 
     # Кодирование категориальных
-    if 'http_method' in df:
+    if 'http_method' in df.columns:
         ohe = OneHotEncoder(sparse_output=False, handle_unknown='ignore')
         http_encoded = ohe.fit_transform(df[['http_method']])
         http_cols = ohe.get_feature_names_out(['http_method'])
@@ -70,7 +81,7 @@ def preprocess_data(input_file: str, output_dir: str = 'data', scaler_type: str 
 
     if len(numeric_cols) > 0:
         df[numeric_cols] = scaler.fit_transform(df[numeric_cols])
-        logging.info(f"Масштабирование (minmax) для {len(numeric_cols)} числовых колонок")
+        logging.info(f"Масштабирование ({scaler_type}) для {len(numeric_cols)} числовых колонок")
     else:
         logging.warning("Нет числовых колонок для масштабирования")
 
@@ -87,13 +98,20 @@ def preprocess_data(input_file: str, output_dir: str = 'data', scaler_type: str 
     logging.info(f"Обработанные данные сохранены в {output_path}")
 
     # Формирование features/label и split
-    if 'label_encoded' in df:
-        X = df.drop(['label', 'label_encoded'], axis=1, errors='ignore')  # Features
-        y = df['label_encoded']  # Label
+    if 'label_encoded' in df.columns:
+        # Только числовые фичи, без label_encoded
+        X = df.select_dtypes(include=['int64', 'float64']).drop(columns=['label_encoded'], errors='ignore')
+        y = df['label_encoded']
     else:
-        X = df.copy()
+        X = df.select_dtypes(include=['int64', 'float64'])
         y = None
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42, stratify=y) if y is not None else (None, None, None, None)
+
+    if y is not None and len(X) > 0:
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=test_size, random_state=42, stratify=y
+        )
+    else:
+        X_train = X_test = y_train = y_test = None
     logging.info(f"Train/test split: {len(X_train) if X_train is not None else 0} / {len(X_test) if X_test is not None else 0} строк")
 
     return {'X_train': X_train, 'X_test': X_test, 'y_train': y_train, 'y_test': y_test, 'processed_df': df}

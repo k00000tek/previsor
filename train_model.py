@@ -3,7 +3,7 @@ from modules.analyzer import Analyzer
 
 if __name__ == "__main__":
     result = preprocess_data('data/collected_traffic.csv')
-    X_train = result['X_train'].drop(columns=['label_encoded'], errors='ignore')
+    X_train = result['X_train']
     X_test = result['X_test']
     y_train = result['y_train']
     y_test = result['y_test']

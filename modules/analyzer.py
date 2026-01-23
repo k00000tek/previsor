@@ -60,30 +60,60 @@ class Analyzer:
         return {'f1_score': f1, 'report': report}
 
     def analyze(self, X, source_ips=None) -> list:
-        """Инференс: предсказание угрозы."""
+        """Инференс: предсказание угроз и расчёт риска."""
         if self.model is None:
             self.load_model()
 
         if self.model is None:
             raise ValueError("Модель не найдена. Обучите или загрузите модель.")
 
-        probs = self.model.predict_proba(X)
-        pred = self.model.predict(X)
-        max_prob = np.max(probs, axis=1)
+        # Предсказания модели
+        probs = self.model.predict_proba(X)              # shape: (n_samples, n_classes)
+        pred = self.model.predict(X)                     # предсказанные классы (int)
+        max_prob = np.max(probs, axis=1)                 # максимальная вероятность по классам
 
         alerts = []
-        for i, (p, prob) in enumerate(zip(pred, max_prob)):
+        for i, (p, base_prob) in enumerate(zip(pred, max_prob)):
             ip = source_ips[i] if source_ips and i < len(source_ips) else None
-            enriched_prob = enrich_alert_with_reputation(self._decode_label(p), prob, ip)
+            label = self._decode_label(p)
+
+            # Базовая вероятность (из модели)
+            base_prob = float(base_prob)
+
+            # Обогащаем риск репутацией IP (AbuseIPDB)
+            risk_score = enrich_alert_with_reputation(label, base_prob, ip)
+            risk_score = float(risk_score)
+
+            # Определяем, нормальный ли это трафик ПО ПРЕДСКАЗАННОМУ КЛАССУ
+            label_lower = str(label).lower()
+            is_normal = (
+                label_lower.startswith("normal") or
+                "benign" in label_lower or
+                "background" in label_lower
+            )
+            is_attack = not is_normal
+
+            # Порог срабатывания по риск-скорe (пока простой, потом усложним)
+            THRESHOLD = 0.95
+            is_alert = bool(is_attack and risk_score >= THRESHOLD)
+
             alert = {
-                'alert': int(prob > 0.95),  # Порог
-                'type': self._decode_label(p),
-                'probability': float(prob),
-                'timestamp': datetime.now().isoformat()
+                "alert": int(is_alert),
+                "type": label,
+                # base_probability — как считает модель без учёта репутации
+                "base_probability": base_prob,
+                # probability — уже обогащённый риск (то, что пишем в БД)
+                "probability": risk_score,
+                "timestamp": datetime.now().isoformat(),
+                "source_ip": ip,
             }
             alerts.append(alert)
-            if alert['alert']:
-                logging.warning(f"УГРОЗА: {alert['type']} (вероятность: {prob:.2f})")
+
+            if is_alert:
+                logging.warning(
+                    f"УГРОЗА: {label} "
+                    f"(base_prob={base_prob:.2f}, risk={risk_score:.2f}, IP={ip})"
+                )
 
         return alerts
 
