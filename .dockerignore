@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+.env
+.env.*
+
+# IDE
+.idea/
+.vscode/
+
+# VCS
+.git/
+
+# Логи/служебное
+*.log
+celerybeat-schedule
+
+# Runtime-артефакты (создаются при запуске)
+data/runtime/
+db/runtime/
+models/runtime/
+
+# Большие/временные данные
+utils/tmp_kaggle/
+data/**/*.zip
+utils/**/*.zip

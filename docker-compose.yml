@@ -1,0 +1,99 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  web:
+    build: .
+    command: gunicorn -b 0.0.0.0:5000 app:app --workers 2 --threads 4 --timeout 120
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - PREVISOR_MODE=${PREVISOR_MODE:-demo}
+      - PREVISOR_COLLECTION_INTERVAL=${PREVISOR_COLLECTION_INTERVAL:-300}
+
+      # Пути под твою структуру
+      - PREVISOR_DATA_DIR=/app/data/runtime
+      - PREVISOR_DB_PATH=/app/db/runtime/previsor.db
+      - PREVISOR_MODELS_DIR=/app/models/runtime
+
+      # Сетевой интерфейс (для real, если используешь в config.py)
+      - PREVISOR_NET_IFACE=${PREVISOR_NET_IFACE:-}
+
+      # Интеграции (опционально)
+      - ABUSEIPDB_KEY=${ABUSEIPDB_KEY:-}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+
+      # dev-only эндпоинты (например /alerts/purge)
+      - PREVISOR_ENABLE_DEV_ENDPOINTS=${PREVISOR_ENABLE_DEV_ENDPOINTS:-true}
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./data/runtime:/app/data/runtime
+      - ./db/runtime:/app/db/runtime
+      - ./models/runtime:/app/models/runtime
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: .
+    command: celery -A celery_app.celery worker --loglevel=INFO
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - PREVISOR_MODE=${PREVISOR_MODE:-demo}
+      - PREVISOR_COLLECTION_INTERVAL=${PREVISOR_COLLECTION_INTERVAL:-300}
+
+      - PREVISOR_DATA_DIR=/app/data/runtime
+      - PREVISOR_DB_PATH=/app/db/runtime/previsor.db
+      - PREVISOR_MODELS_DIR=/app/models/runtime
+
+      - PREVISOR_NET_IFACE=${PREVISOR_NET_IFACE:-}
+
+      - ABUSEIPDB_KEY=${ABUSEIPDB_KEY:-}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+
+      - MAX_TELEGRAM_ALERTS_PER_RUN=${MAX_TELEGRAM_ALERTS_PER_RUN:-5}
+
+      # чтобы Celery не шумел SecurityWarning при root в контейнере
+      # - PYTHONWARNINGS=ignore::celery.platforms.SecurityWarning
+      - C_FORCE_ROOT=1
+    volumes:
+      - ./data/runtime:/app/data/runtime
+      - ./db/runtime:/app/db/runtime
+      - ./models/runtime:/app/models/runtime
+    depends_on:
+      redis:
+        condition: service_healthy
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+
+  beat:
+    build: .
+    working_dir: /app
+    command: >
+      celery -A celery_app.celery beat
+      -l INFO
+      --schedule /var/run/celery/celerybeat-schedule
+      --pidfile /var/run/celery/celerybeat.pid
+    environment:
+      - PREVISOR_MODE=real
+      - COLLECTION_INTERVAL=300
+      - CELERY_BROKER_URL=redis://redis:6379/0
+    volumes:
+      - ./:/app
+      - celerybeat_data:/var/run/celery
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+volumes:
+  celerybeat_data:

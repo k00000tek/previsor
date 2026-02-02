@@ -1,104 +1,94 @@
-import os
-from celery import Celery
-from modules.data_collector import collect_traffic  # Импорт твоей функции
-from config import MODE, COLLECTION_INTERVAL, CELERY_BROKER_URL, DATA_DIR  # Из config.py
-from modules.preprocessor import preprocess_data
-from config import PROCESSED_DATA_DIR
-from modules.analyzer import Analyzer
-from modules.database import save_alert
-from utils.notifications import notify_new_alert
+from __future__ import annotations
+
 import logging
+import os
+from collections import Counter
+from typing import Any, Dict, List
 
-# Создаём Celery app
-celery = Celery('previsor',
-                broker=CELERY_BROKER_URL,
-                include=['celery_app'])  # include для задач в этом файле
+from celery import Celery
 
-# Задача для сбора данных
-@celery.task
-def scheduled_collect():
-    df = collect_traffic(mode=MODE)
-    # Определяем имя файла по MODE
-    filename_map = {
-        'real': 'collected_traffic.csv',
-        'simulated': 'simulated_traffic.csv',
-        'test': 'test_traffic.csv',
-    }
-    raw_name = filename_map.get(MODE, 'collected_traffic.csv')
-    input_path = os.path.join('data', raw_name)
-    df.to_csv(input_path, index=False)
+import config as cfg
+from modules.pipeline import PreVisorPipeline
+from modules.database import save_alert
+from utils.notifications import notify_new_alert, notify_pipeline_summary
 
-    preprocess_data(input_path, output_dir=PROCESSED_DATA_DIR)
-    return "Сбор и предобработка завершены"
+logger = logging.getLogger(__name__)
+if not logging.getLogger().handlers:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# Настройка beat-schedule (цикл каждые COLLECTION_INTERVAL сек)
-# celery.conf.beat_schedule = {
-#     'collect-every-interval': {
-#         'task': 'celery_app.scheduled_collect',
-#         'schedule': COLLECTION_INTERVAL,  # Из config.py (600 для 10 мин)
-#     },
-# }
 
-@celery.task
-def full_pipeline():
+def _broker_url() -> str:
+    """Возвращает URL брокера Celery с приоритетом env."""
+    return (
+        os.getenv("CELERY_BROKER_URL")
+        or getattr(cfg, "CELERY_BROKER_URL", None)
+        or "redis://localhost:6379/0"
+    )
+
+
+celery = Celery(
+    "previsor",
+    broker=_broker_url(),
+    include=["celery_app"],
+)
+
+celery.conf.broker_connection_retry_on_startup = True
+
+
+def _get_alert_type(a: Dict[str, Any]) -> str:
+    """Нормализует ключи типа алерта, чтобы не зависеть от формата пайплайна."""
+    return str(a.get("alert_type") or a.get("type") or "Unknown")
+
+
+@celery.task(name="previsor.full_pipeline")
+def full_pipeline(model_type: str = "rf") -> Dict[str, Any]:
+    """Запускает полный пайплайн PreVisor и сохраняет найденные алерты в БД."""
+    mode = getattr(cfg, "MODE", os.getenv("PREVISOR_MODE", "demo"))
+    pipeline = PreVisorPipeline(model_type=model_type)
+    result = pipeline.run(mode=mode)
+
+    alert_rows: List[Dict[str, Any]] = [a for a in (result.alerts or []) if int(a.get("alert", 0)) == 1]
+
+    new_alerts = 0
+    for a in alert_rows:
+        alert_type = _get_alert_type(a)
+        prob = float(a.get("probability", 0.0) or 0.0)
+        ip = a.get("source_ip")
+        save_alert(alert_type=alert_type, probability=prob, source_ip=ip)
+        new_alerts += 1
+
+    max_notifs = int(os.getenv("MAX_TELEGRAM_ALERTS_PER_RUN", "5"))
+    top_alerts = sorted(alert_rows, key=lambda x: float(x.get("probability", 0.0) or 0.0), reverse=True)
+
+    sent = 0
+    for a in top_alerts[:max_notifs]:
+        try:
+            notify_new_alert(_get_alert_type(a), float(a.get("probability", 0.0) or 0.0), a.get("source_ip"))
+            sent += 1
+        except Exception:
+            logger.exception("Notification error (notify_new_alert)")
+
     try:
-        # 1. Сбор
-        df_raw = collect_traffic(mode=MODE, include_labels=False)
+        top_types = Counter(_get_alert_type(a) for a in alert_rows).most_common(5)
+        max_prob = float(top_alerts[0].get("probability", 0.0) or 0.0) if top_alerts else None
+        notify_pipeline_summary(
+            model_type=model_type,
+            total_alerts=len(result.alerts or []),
+            new_alerts=new_alerts,
+            telegram_sent=sent,
+            top_types=top_types,
+            max_probability=max_prob,
+        )
+    except Exception:
+        logger.exception("Notification error (notify_pipeline_summary)")
 
-        filename_map = {
-            'real': 'collected_traffic.csv',
-            'simulated': 'simulated_traffic.csv',
-            'test': 'test_traffic.csv'
-        }
-        raw_name = filename_map.get(MODE, 'collected_traffic.csv')
-        raw_path = os.path.join(DATA_DIR, raw_name)
-        df_raw.to_csv(raw_path, index=False)
+    logger.info("Celery full_pipeline: mode=%s new_alerts=%s total=%s telegram_sent=%s", mode, new_alerts, len(result.alerts or []), sent)
+    return {"new_alerts": new_alerts, "total_alerts": len(result.alerts or []), "telegram_sent": sent}
 
 
-        # 2. Предобработка
-        result = preprocess_data(raw_path, output_dir=DATA_DIR)
-        processed_name = raw_name.replace('.csv', '_processed.csv')
-        processed_path = os.path.join(DATA_DIR, processed_name)
-        result['processed_df'].to_csv(processed_path, index=False)
-        df_processed = result['processed_df']
-
-        # 3. Анализ
-        X = result['X_test'] if result['X_test'] is not None else result['X_train']
-
-        if X is None or len(X) == 0:
-            return "Нет данных для анализа"
-
-        # Берём IP только для тех строк, которые реально в X
-        source_ips = None
-        if 'source_ip' in df_processed.columns:
-            # Индексы X — подмножество исходных индексов df_processed
-            # Привязываем source_ip по индексу
-            source_ips = df_processed.loc[X.index, 'source_ip'].tolist()
-        # На всякий случай убираем source_ip из X, если он есть
-        X_no_ip = X.drop(columns=['source_ip'], errors='ignore')
-
-        analyzer = Analyzer(model_type='rf')
-        analyzer.model_path = 'models/previsor_model.pkl'
-        alerts = analyzer.analyze(X_no_ip.values, source_ips=source_ips)
-
-        # 4. Сохранение
-        new_alerts = 0
-        for a in alerts:
-            if a['alert']:
-                save_alert(a['type'], a['probability'], a.get('source_ip'))
-                notify_new_alert(a['type'], a['probability'], a.get('source_ip'))
-                new_alerts += 1
-
-        logging.info(f"Автопайплайн завершён: {new_alerts} новых алертов")
-        return f"Успех: {new_alerts} алертов"
-    except Exception as e:
-        logging.error(f"Автопайплайн ошибка: {e}")
-        return f"Ошибка: {e}"
-
-# Beat schedule
 celery.conf.beat_schedule = {
-    'full-pipeline-every-10min': {
-        'task': 'celery_app.full_pipeline',
-        'schedule': COLLECTION_INTERVAL,
-    },
+    "full-pipeline-every-interval": {
+        "task": "previsor.full_pipeline",
+        "schedule": getattr(cfg, "COLLECTION_INTERVAL", 300),
+    }
 }
