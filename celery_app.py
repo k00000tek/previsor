@@ -41,11 +41,21 @@ def _get_alert_type(a: Dict[str, Any]) -> str:
 
 
 @celery.task(name="previsor.full_pipeline")
-def full_pipeline(model_type: str = "rf") -> Dict[str, Any]:
-    """Запускает полный пайплайн PreVisor и сохраняет найденные алерты в БД."""
-    mode = getattr(cfg, "MODE", os.getenv("PREVISOR_MODE", "demo"))
-    pipeline = PreVisorPipeline(model_type=model_type)
-    result = pipeline.run(mode=mode)
+def full_pipeline(mode: str = "demo", model: str = "rf") -> Dict[str, Any]:
+    """Запускает полный пайплайн PreVisor и сохраняет найденные алерты в БД.
+
+    Args:
+        mode: Режим работы (real/demo/test/dataset).
+        model: Тип модели классификатора (rf/xgb).
+
+    Returns:
+        Словарь со сводкой по прогону.
+    """
+    mode = (mode or getattr(cfg, "MODE", os.getenv("PREVISOR_MODE", "demo"))).strip().lower()
+    model = (model or os.getenv("PREVISOR_MODEL", "rf")).strip().lower()
+
+    pipeline = PreVisorPipeline(model_type=model)
+    result = pipeline.run(mode=mode, model_type=model)
 
     alert_rows: List[Dict[str, Any]] = [a for a in (result.alerts or []) if int(a.get("alert", 0)) == 1]
 
@@ -72,7 +82,7 @@ def full_pipeline(model_type: str = "rf") -> Dict[str, Any]:
         top_types = Counter(_get_alert_type(a) for a in alert_rows).most_common(5)
         max_prob = float(top_alerts[0].get("probability", 0.0) or 0.0) if top_alerts else None
         notify_pipeline_summary(
-            model_type=model_type,
+            model_type=model,
             total_alerts=len(result.alerts or []),
             new_alerts=new_alerts,
             telegram_sent=sent,
@@ -82,13 +92,24 @@ def full_pipeline(model_type: str = "rf") -> Dict[str, Any]:
     except Exception:
         logger.exception("Notification error (notify_pipeline_summary)")
 
-    logger.info("Celery full_pipeline: mode=%s new_alerts=%s total=%s telegram_sent=%s", mode, new_alerts, len(result.alerts or []), sent)
-    return {"new_alerts": new_alerts, "total_alerts": len(result.alerts or []), "telegram_sent": sent}
+    logger.info(
+        "Celery full_pipeline: mode=%s model=%s new_alerts=%s total=%s telegram_sent=%s",
+        mode,
+        model,
+        new_alerts,
+        len(result.alerts or []),
+        sent,
+    )
+    return {"mode": mode, "model": model, "new_alerts": new_alerts, "total_alerts": len(result.alerts or []), "telegram_sent": sent}
 
 
 celery.conf.beat_schedule = {
     "full-pipeline-every-interval": {
         "task": "previsor.full_pipeline",
         "schedule": getattr(cfg, "COLLECTION_INTERVAL", 300),
+        "kwargs": {
+            "mode": getattr(cfg, "MODE", os.getenv("PREVISOR_MODE", "real")),
+            "model": os.getenv("PREVISOR_MODEL", "rf"),
+        },
     }
 }

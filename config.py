@@ -83,6 +83,22 @@ PACKET_SNIFF_TIMEOUT_SEC = int(os.getenv("PREVISOR_PACKET_TIMEOUT", "30"))
 BPF_FILTER = os.getenv("PREVISOR_BPF_FILTER", "")  # например: "tcp or udp"
 
 # -----------------------------
+# Пути к runtime CSV
+# -----------------------------
+
+# Сырые данные (обычная коллекция)
+COLLECTED_TRAFFIC_CSV = os.getenv(
+    "PREVISOR_COLLECTED_TRAFFIC_CSV",
+    os.path.join(DATA_RUNTIME_DIR, "collected_traffic.csv"),
+)
+
+# Baseline-накопление для обучения детектора аномалий
+BASELINE_TRAFFIC_CSV = os.getenv(
+    "PREVISOR_BASELINE_TRAFFIC_CSV",
+    os.path.join(DATA_RUNTIME_DIR, "baseline_traffic.csv"),
+)
+
+# -----------------------------
 # Пути к артефактам моделей (runtime)
 # -----------------------------
 
@@ -98,6 +114,12 @@ LABEL_ENCODER_PATH = os.getenv("PREVISOR_LABEL_ENCODER_PATH", os.path.join(MODEL
 
 # Аномалии
 IFOREST_MODEL_PATH = os.getenv("PREVISOR_IFOREST_MODEL_PATH", os.path.join(MODELS_RUNTIME_DIR, "isolation_forest.pkl"))
+
+# Включение детектора аномалий.
+# Требование для рабочего сценария: anomaly_detector используется ТОЛЬКО если:
+#   1) ANOMALY_ENABLED=1 (или PREVISOR_ANOMALY_ENABLED=1)
+#   2) baseline-модель IsolationForest существует (см. IFOREST_MODEL_PATH)
+ANOMALY_ENABLED = _env_bool("ANOMALY_ENABLED", False) or _env_bool("PREVISOR_ANOMALY_ENABLED", False)
 
 # Отчёты (внутреннее)
 LAST_REPORT_PATH = os.getenv("PREVISOR_LAST_REPORT_PATH", os.path.join(MODELS_RUNTIME_DIR, "last_report.txt"))

@@ -13,6 +13,8 @@ from config import (
     MODE,
     SAMPLES_DIR,
     DATA_RUNTIME_DIR,
+    COLLECTED_TRAFFIC_CSV,
+    BASELINE_TRAFFIC_CSV,
     DATASETS_DIR,
     DATASET_NAME,
     DEMO_SOURCE,
@@ -80,7 +82,13 @@ def _safe_read_csv(path: str) -> Optional[pd.DataFrame]:
 def _default_output_csv() -> str:
     """Возвращает дефолтный путь сохранения собранного трафика в runtime."""
     os.makedirs(DATA_RUNTIME_DIR, exist_ok=True)
-    return os.path.join(DATA_RUNTIME_DIR, "collected_traffic.csv")
+    return COLLECTED_TRAFFIC_CSV
+
+
+def _default_baseline_csv() -> str:
+    """Возвращает дефолтный путь накопления baseline-трафика в runtime."""
+    os.makedirs(DATA_RUNTIME_DIR, exist_ok=True)
+    return BASELINE_TRAFFIC_CSV
 
 
 def collect_real_traffic(
@@ -329,6 +337,12 @@ def collect_traffic(
     mode: CollectorMode = MODE,  # type: ignore[assignment]
     save_csv: bool = True,
     output_csv: Optional[str] = None,
+    baseline: bool = False,
+    # Параметры захвата для режима real
+    iface: str = NETWORK_INTERFACE,
+    num_packets: int = PACKET_COUNT_PER_COLLECTION,
+    timeout_sec: int = PACKET_SNIFF_TIMEOUT_SEC,
+    bpf_filter: str = BPF_FILTER,
     demo_source: DemoSource = DEMO_SOURCE,  # type: ignore[assignment]
     demo_rows: int = DEMO_ROWS,
     dataset_name: str = DATASET_NAME,
@@ -344,6 +358,11 @@ def collect_traffic(
         mode: "real" | "demo" | "test" | "dataset".
         save_csv: Сохранять ли собранные данные в CSV.
         output_csv: Явный путь для сохранения (если не задан — сохранение в data/runtime/collected_traffic.csv).
+        baseline: Если True — вместо перезаписи используем накопление baseline (append) в baseline_traffic.csv.
+        iface: Имя интерфейса (только для mode="real").
+        num_packets: Количество пакетов за один сбор (только для mode="real").
+        timeout_sec: Таймаут захвата (сек), только для mode="real".
+        bpf_filter: BPF фильтр (только для mode="real").
         demo_source: Источник для demo/test ("mixed"/"cicids2017"/"csic2010"/"mscad"/"simulated").
         demo_rows: Размер demo/test-выборки.
         dataset_name: Имя processed датасета для режима dataset.
@@ -354,7 +373,12 @@ def collect_traffic(
     _maybe_seed()
 
     if mode == "real":
-        df = collect_real_traffic()
+        df = collect_real_traffic(
+            iface=iface,
+            num_packets=num_packets,
+            timeout_sec=timeout_sec,
+            bpf_filter=bpf_filter,
+        )
     elif mode == "dataset":
         df = collect_from_dataset(dataset_name=dataset_name, num_rows=demo_rows)
     else:
@@ -366,9 +390,16 @@ def collect_traffic(
 
     if save_csv:
         if output_csv is None:
-            output_csv = _default_output_csv()
+            output_csv = _default_baseline_csv() if baseline else _default_output_csv()
+
         os.makedirs(os.path.dirname(output_csv), exist_ok=True)
-        df.to_csv(output_csv, index=False)
-        logger.info("Данные сохранены: %s", output_csv)
+
+        if baseline:
+            file_exists = os.path.exists(output_csv) and os.path.getsize(output_csv) > 0
+            df.to_csv(output_csv, mode="a", header=not file_exists, index=False)
+            logger.info("Baseline обновлён (append): %s (rows=%s)", output_csv, len(df))
+        else:
+            df.to_csv(output_csv, index=False)
+            logger.info("Данные сохранены: %s", output_csv)
 
     return df

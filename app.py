@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Dict, Optional
+from collections import Counter
+from typing import Any, Dict, Optional, List
 
 from flask import Flask, jsonify, render_template, request
 from werkzeug.utils import secure_filename
@@ -11,6 +12,13 @@ import config as cfg
 from modules.data_collector import collect_traffic
 from modules.database import get_alerts, save_alert, update_alert_status, purge_alerts
 from modules.pipeline import PreVisorPipeline
+
+# Telegram-уведомления (может быть отключено/отсутствовать в минимальном окружении).
+try:  # pragma: no cover
+    from utils.notifications import notify_new_alert, notify_pipeline_summary
+except Exception:  # pragma: no cover
+    notify_new_alert = None  # type: ignore
+    notify_pipeline_summary = None  # type: ignore
 
 logger = logging.getLogger(__name__)
 if not logging.getLogger().handlers:
@@ -33,6 +41,22 @@ def _env_bool(name: str, default: bool) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _parse_bool(value: Optional[str]) -> bool:
+    """Преобразует строку query-параметра в bool.
+
+    Поддерживаемые значения: 1/0, true/false, yes/no, on/off.
+
+    Args:
+        value: Значение query-параметра.
+
+    Returns:
+        True, если значение интерпретируется как истина.
+    """
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def _project_root() -> str:
@@ -96,18 +120,35 @@ def collect_endpoint():
     source = (request.args.get("source") or getattr(cfg, "DEMO_SOURCE", "mixed")).strip().lower()
     dataset_name = (request.args.get("dataset") or getattr(cfg, "DATASET_NAME", "cicids2017_processed.csv")).strip()
 
+    baseline = _parse_bool(request.args.get("baseline"))
+
     if mode == "simulated":
         mode = "demo"
         source = "simulated"
 
-    df = collect_traffic(
-        mode=mode,  # type: ignore[arg-type]
-        save_csv=True,
-        demo_source=source,  # type: ignore[arg-type]
-        demo_rows=rows,
-        dataset_name=dataset_name,
-    )
-    return jsonify({"status": "OK", "mode": mode, "rows": int(len(df))})
+    collect_kwargs: Dict[str, Any] = {
+        "mode": mode,
+        "save_csv": True,
+        "baseline": baseline,
+        "demo_source": source,
+        "dataset_name": dataset_name,
+    }
+
+    # В real интерпретируем rows как число пакетов за сбор.
+    if mode == "real":
+        collect_kwargs["num_packets"] = int(rows)
+    else:
+        collect_kwargs["demo_rows"] = int(rows)
+
+    df = collect_traffic(**collect_kwargs)  # type: ignore[arg-type]
+
+    target_csv = None
+    if baseline:
+        target_csv = getattr(cfg, "BASELINE_TRAFFIC_CSV", None)
+    else:
+        target_csv = getattr(cfg, "COLLECTED_TRAFFIC_CSV", None)
+
+    return jsonify({"status": "OK", "mode": mode, "baseline": bool(baseline), "rows": int(len(df)), "csv": target_csv})
 
 
 @app.route("/preprocess", methods=["GET"])
@@ -180,28 +221,61 @@ def analyze_endpoint():
                 # 3) Автозапуск: pipeline сам соберёт данные согласно mode
                 result = pipeline.run(mode=mode)
 
-        # Сохраняем в БД только alert == 1
-        saved = 0
-        found = 0
-        for a in (result.alerts or []):
-            if int(a.get("alert", 0)) != 1:
-                continue
+        alert_rows: List[Dict[str, Any]] = [
+            a for a in (result.alerts or []) if int(a.get("alert", 0)) == 1
+        ]
 
-            found += 1
+        # Сохраняем в БД только alert == 1
+        new_alerts = 0
+        for a in alert_rows:
             alert_type = a.get("alert_type") or a.get("type") or "Unknown"
             prob = float(a.get("probability", 0.0) or 0.0)
             ip = a.get("source_ip")
-
             save_alert(alert_type=str(alert_type), probability=prob, source_ip=ip)
-            saved += 1
+            new_alerts += 1
+
+        # Отправляем Telegram-уведомления аналогично celery worker.
+        max_notifs = int(os.getenv("MAX_TELEGRAM_ALERTS_PER_RUN", str(getattr(cfg, "MAX_TELEGRAM_ALERTS_PER_RUN", 5))))
+        top_alerts = sorted(alert_rows, key=lambda x: float(x.get("probability", 0.0) or 0.0), reverse=True)
+
+        telegram_sent = 0
+        if notify_new_alert is not None:
+            for a in top_alerts[:max_notifs]:
+                try:
+                    notify_new_alert(
+                        str(a.get("alert_type") or a.get("type") or "Unknown"),
+                        float(a.get("probability", 0.0) or 0.0),
+                        a.get("source_ip"),
+                    )
+                    telegram_sent += 1
+                except Exception:
+                    logger.exception("Notification error (notify_new_alert)")
+
+        if notify_pipeline_summary is not None:
+            try:
+                top_types = Counter(
+                    str(a.get("alert_type") or a.get("type") or "Unknown") for a in alert_rows
+                ).most_common(5)
+                max_prob = float(top_alerts[0].get("probability", 0.0) or 0.0) if top_alerts else None
+                notify_pipeline_summary(
+                    model_type=model_type,
+                    total_alerts=len(result.alerts or []),
+                    new_alerts=new_alerts,
+                    telegram_sent=telegram_sent,
+                    top_types=top_types,
+                    max_probability=max_prob,
+                )
+            except Exception:
+                logger.exception("Notification error (notify_pipeline_summary)")
 
         return jsonify(
             {
                 "status": "OK",
                 "mode": mode,
                 "model": model_type,
-                "alerts_found": found,
-                "saved_to_db": saved,
+                "new_alerts": int(new_alerts),
+                "total_alerts": int(len(result.alerts or [])),
+                "telegram_sent": int(telegram_sent),
                 "alerts": (result.alerts or [])[:10],
             }
         )

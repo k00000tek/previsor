@@ -8,7 +8,7 @@ from typing import Optional, Dict, Any, List
 import joblib
 import pandas as pd
 
-from config import MODE, FEATURE_SCHEMA_PATH
+from config import MODE, FEATURE_SCHEMA_PATH, ANOMALY_ENABLED, IFOREST_MODEL_PATH
 from modules.data_collector import collect_traffic
 from modules.preprocessor import preprocess_data
 from modules.analyzer import Analyzer
@@ -59,21 +59,49 @@ class PreVisorPipeline:
         anomaly_threshold: Optional[float] = None,  # legacy: decision_function < threshold
         max_anomaly_alerts: int = 50,            # ограничение числа аномалий на прогон
     ) -> None:
-        self.model_type = model_type
+        self.model_type = str(model_type).strip().lower()
         self.feature_schema_path = feature_schema_path
 
         self.enable_classifier = enable_classifier
-        self.enable_anomalies = enable_anomalies
+
+        # Детектор аномалий включаем только при выполнении условий рабочего сценария.
+        # Требование:
+        #   - ANOMALY_ENABLED=1 (или PREVISOR_ANOMALY_ENABLED=1)
+        #   - baseline-модель IsolationForest существует
+        self.enable_anomalies = self._should_enable_anomalies(enable_anomalies)
 
         self.anomaly_strategy = anomaly_strategy
         self.anomaly_quantile = anomaly_quantile
         self.anomaly_threshold = anomaly_threshold
         self.max_anomaly_alerts = max_anomaly_alerts
 
+        # Кэшируем Analyzer, чтобы не перечитывать модель с диска на каждом прогоне.
+        self.analyzer = Analyzer(model_type=self.model_type)
+
+    @staticmethod
+    def _should_enable_anomalies(requested: bool) -> bool:
+        """Определяет, можно ли включить аномалии в текущем окружении.
+
+        Args:
+            requested: Желание вызывающего кода включить аномалии.
+
+        Returns:
+            True, если аномалии следует включить.
+        """
+        if not requested:
+            return False
+        if not ANOMALY_ENABLED:
+            return False
+        if not IFOREST_MODEL_PATH or not os.path.exists(IFOREST_MODEL_PATH):
+            logger.info("ANOMALY_ENABLED=1, но IsolationForest не найден (%s) — anomaly_detector выключен", IFOREST_MODEL_PATH)
+            return False
+        return True
+
     def run(
         self,
         *,
         mode: str = MODE,
+        model_type: Optional[str] = None,
         input_df: Optional[pd.DataFrame] = None,
         input_csv: Optional[str] = None,
         collect_params: Optional[Dict[str, Any]] = None,
@@ -92,6 +120,7 @@ class PreVisorPipeline:
 
         Args:
             mode: Режим работы ("real"/"demo"/"test"/"dataset").
+            model_type: Если задано — переопределяет тип модели классификатора ("rf"|"xgb") для текущего запуска.
             input_df: Сырые данные DataFrame (если уже собраны).
             input_csv: Путь к CSV (если уже сохранены).
             collect_params: Параметры для collect_traffic() (кроме mode/save_csv).
@@ -100,6 +129,11 @@ class PreVisorPipeline:
         Returns:
             PipelineResult: processed_df, X и список алертов (classifier + anomaly_detector).
         """
+        if model_type is not None:
+            model_type_norm = str(model_type).strip().lower()
+            if model_type_norm and model_type_norm != self.model_type:
+                self.model_type = model_type_norm
+                self.analyzer = Analyzer(model_type=self.model_type)
         if mode not in {"real", "demo", "test", "dataset"}:
             raise ValueError(f"Неизвестный режим mode={mode!r}. Ожидается: real/demo/test/dataset")
 
@@ -135,8 +169,7 @@ class PreVisorPipeline:
 
         # 4) Классификация (RF/XGB)
         if self.enable_classifier:
-            analyzer = Analyzer(model_type=self.model_type)
-            class_alerts = analyzer.analyze(X, source_ips=source_ips)
+            class_alerts = self.analyzer.analyze(X, source_ips=source_ips)
             alerts.extend(self._normalize_class_alerts(class_alerts))
 
         # 5) Аномалии (IsolationForest)

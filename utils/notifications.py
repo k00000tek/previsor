@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import html
 import logging
 import os
-from typing import List, Optional, Tuple
+import textwrap
+from dataclasses import dataclass
+from email.mime.text import MIMEText
+from typing import Iterable, List, Optional, Tuple
 
 import requests
 import smtplib
-from email.mime.text import MIMEText
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -16,73 +19,234 @@ if not logging.getLogger().handlers:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
-# -----------------------------
-# Конфиг
-# -----------------------------
+def _env_bool(name: str, default: bool) -> bool:
+    """Читает булеву переменную окружения.
 
-TELEGRAM_BOT_TOKEN = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
-TELEGRAM_CHAT_ID = (os.getenv("TELEGRAM_CHAT_ID") or "").strip()
+    Поддерживаемые значения: 1/0, true/false, yes/no, on/off (без учета регистра).
 
-SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-SMTP_USER = os.getenv("SMTP_USER")
-SMTP_PASS = os.getenv("SMTP_PASS")
-EMAIL_TO = os.getenv("EMAIL_TO")
+    Args:
+        name: Имя переменной окружения.
+        default: Значение по умолчанию.
+
+    Returns:
+        Булево значение.
+    """
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-def _telegram_configured() -> bool:
-    """Проверяет наличие минимальной конфигурации Telegram."""
-    return bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)
+def _split_csv(value: str) -> List[str]:
+    """Разбирает строку вида "a,b,c" в список значений."""
+    return [v.strip() for v in (value or "").split(",") if v.strip()]
+
+
+def _chunks(text: str, limit: int) -> Iterable[str]:
+    """Бьёт длинное сообщение на части до лимита Telegram (4096)."""
+    if not text:
+        return []
+    if len(text) <= limit:
+        return [text]
+
+    parts: List[str] = []
+    buf = ""
+    for line in text.splitlines(keepends=True):
+        if len(buf) + len(line) <= limit:
+            buf += line
+            continue
+
+        if buf:
+            parts.append(buf)
+            buf = ""
+
+        if len(line) <= limit:
+            buf = line
+            continue
+
+        for w in line.split(" "):
+            add = w + " "
+            if len(buf) + len(add) <= limit:
+                buf += add
+            else:
+                if buf:
+                    parts.append(buf)
+                buf = add
+
+    if buf:
+        parts.append(buf)
+    return parts
+
+
+@dataclass(frozen=True)
+class TelegramConfig:
+    """Конфигурация Telegram-уведомлений.
+
+    Attributes:
+        token: Токен бота.
+        chat_ids: Один или несколько chat_id (через запятую), куда слать уведомления.
+        enabled: Включён ли канал Telegram.
+        api_base: Базовый URL Bot API (на случай прокси).
+        timeout_sec: Таймаут HTTP запросов.
+    """
+
+    token: str
+    chat_ids: List[str]
+    enabled: bool
+    api_base: str
+    timeout_sec: int
+
+
+def _telegram_config() -> TelegramConfig:
+    token = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+    chat_ids = _split_csv(os.getenv("TELEGRAM_CHAT_ID") or "")
+    enabled = _env_bool("PREVISOR_TELEGRAM_ENABLED", True)
+    api_base = (os.getenv("TELEGRAM_API_BASE") or "https://api.telegram.org").rstrip("/")
+    timeout_sec = int(os.getenv("TELEGRAM_TIMEOUT_SEC", "10"))
+    return TelegramConfig(
+        token=token,
+        chat_ids=chat_ids,
+        enabled=enabled,
+        api_base=api_base,
+        timeout_sec=timeout_sec,
+    )
+
+
+def _telegram_ready(cfg: TelegramConfig) -> bool:
+    return bool(cfg.enabled and cfg.token and cfg.chat_ids)
 
 
 def send_telegram(message: str) -> bool:
     """Отправляет сообщение в Telegram через Bot API.
 
+    Поддерживает несколько chat_id (через запятую в TELEGRAM_CHAT_ID).
+
     Важно:
-    - TELEGRAM_CHAT_ID должен соответствовать чату/пользователю/каналу, где бот имеет доступ.
     - Для личного чата пользователь должен сначала написать боту (/start),
       иначе Telegram часто возвращает 400 "chat not found".
+    - Для группового чата необходимо добавить бота в группу.
 
     Args:
         message: Текст сообщения (HTML-разметка разрешена).
 
     Returns:
-        True, если сообщение успешно отправлено, иначе False.
+        True, если сообщение успешно доставлено хотя бы в один чат.
     """
-    if not _telegram_configured():
-        logger.warning("Telegram: token/chat_id не настроены (пропуск отправки)")
+    cfg = _telegram_config()
+    if not _telegram_ready(cfg):
+        logger.warning(
+            "Telegram: канал выключен или не настроен (enabled=%s token=%s chat_ids=%s)",
+            cfg.enabled,
+            bool(cfg.token),
+            bool(cfg.chat_ids),
+        )
         return False
 
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
+    url = f"{cfg.api_base}/bot{cfg.token}/sendMessage"
 
-    try:
-        resp = requests.post(url, data=payload, timeout=10)
-        ok = (resp.status_code == 200) and (resp.json().get("ok") is True)
-        if ok:
-            logger.info("Telegram: сообщение отправлено")
-            return True
+    parts = list(_chunks(message, limit=4096))
+    delivered_any = False
 
-        # Частая причина: бот не добавлен в чат / пользователь не писал боту
-        if resp.status_code == 400 and "chat not found" in resp.text.lower():
-            logger.error(
-                "Telegram error 400: chat not found. "
-                "Проверь: (1) пользователь написал боту /start, "
-                "(2) TELEGRAM_CHAT_ID верный, "
-                "(3) бот добавлен в группу/канал и имеет права."
-            )
-        else:
-            logger.error("Telegram error %s: %s", resp.status_code, resp.text)
+    for chat_id in cfg.chat_ids:
+        for part in parts:
+            payload = {"chat_id": chat_id, "text": part, "parse_mode": "HTML"}
+            try:
+                resp = requests.post(url, data=payload, timeout=cfg.timeout_sec)
+                ok = (resp.status_code == 200) and (resp.json().get("ok") is True)
+                if ok:
+                    delivered_any = True
+                    continue
 
-        return False
+                if resp.status_code == 400 and "chat not found" in resp.text.lower():
+                    logger.error(
+                        "Telegram error 400: chat not found. "
+                        "Проверь: (1) пользователь написал боту /start, "
+                        "(2) TELEGRAM_CHAT_ID верный, "
+                        "(3) бот добавлен в группу/канал и имеет права. "
+                        "chat_id=%s",
+                        chat_id,
+                    )
+                else:
+                    logger.error("Telegram error %s: %s", resp.status_code, resp.text)
+            except Exception as exc:
+                logger.error("Telegram exception: %s", exc)
 
-    except Exception as exc:
-        logger.error("Telegram exception: %s", exc)
-        return False
+    return delivered_any
+
+
+def fetch_telegram_updates(*, limit: int = 50, offset: Optional[int] = None) -> dict:
+    """Получает updates у Telegram-бота.
+
+    Это утилита для сценария "пользователь нашёл бота → написал /start → мы узнаём chat_id".
+    На Windows локально webhook обычно не используется, поэтому pairing делается через getUpdates.
+
+    Args:
+        limit: Сколько updates запросить.
+        offset: Offset для getUpdates.
+
+    Returns:
+        JSON-ответ Telegram Bot API.
+    """
+    cfg = _telegram_config()
+    if not cfg.token:
+        raise RuntimeError("TELEGRAM_BOT_TOKEN не задан")
+
+    url = f"{cfg.api_base}/bot{cfg.token}/getUpdates"
+    payload = {"limit": int(limit)}
+    if offset is not None:
+        payload["offset"] = int(offset)
+
+    resp = requests.get(url, params=payload, timeout=cfg.timeout_sec)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def extract_chat_candidates(updates_json: dict) -> List[Tuple[str, str]]:
+    """Извлекает кандидатов chat_id из getUpdates.
+
+    Returns:
+        Список пар (chat_id, title_or_username).
+    """
+    results = updates_json.get("result") or []
+    out: List[Tuple[str, str]] = []
+
+    for item in results:
+        msg = item.get("message") or item.get("channel_post") or item.get("edited_message")
+        if not isinstance(msg, dict):
+            continue
+
+        chat = msg.get("chat") or {}
+        chat_id = chat.get("id")
+        if chat_id is None:
+            continue
+
+        title = chat.get("title")
+        username = chat.get("username")
+        first = chat.get("first_name")
+        last = chat.get("last_name")
+
+        name = title or username or " ".join([p for p in [first, last] if p]) or "unknown"
+        out.append((str(chat_id), str(name)))
+
+    seen = set()
+    uniq: List[Tuple[str, str]] = []
+    for cid, name in reversed(out):
+        if cid in seen:
+            continue
+        seen.add(cid)
+        uniq.append((cid, name))
+
+    return list(reversed(uniq))
 
 
 def send_email(subject: str, body: str) -> bool:
     """Отправляет email-уведомление через SMTP.
+
+    Канал email сейчас не используется по умолчанию (в PreVisor основной канал — Telegram),
+    но оставлен как опциональное расширение.
+
+    Переменные окружения:
+        SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, EMAIL_TO
 
     Args:
         subject: Тема письма.
@@ -91,19 +255,25 @@ def send_email(subject: str, body: str) -> bool:
     Returns:
         True, если письмо отправлено, иначе False.
     """
-    if not all([SMTP_HOST, SMTP_USER, SMTP_PASS, EMAIL_TO]):
+    smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    smtp_user = os.getenv("SMTP_USER")
+    smtp_pass = os.getenv("SMTP_PASS")
+    email_to = os.getenv("EMAIL_TO")
+
+    if not all([smtp_host, smtp_user, smtp_pass, email_to]):
         logger.warning("Email: SMTP настройки не заданы (пропуск отправки)")
         return False
 
     msg = MIMEText(body, "html")
     msg["Subject"] = subject
-    msg["From"] = SMTP_USER
-    msg["To"] = EMAIL_TO
+    msg["From"] = smtp_user
+    msg["To"] = email_to
 
     try:
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+        with smtplib.SMTP(smtp_host, smtp_port) as server:
             server.starttls()
-            server.login(SMTP_USER, SMTP_PASS)
+            server.login(smtp_user, smtp_pass)
             server.send_message(msg)
         logger.info("Email: отправлено")
         return True
@@ -115,6 +285,9 @@ def send_email(subject: str, body: str) -> bool:
 def notify_new_alert(alert_type: str, probability: float, source_ip: Optional[str] = None) -> bool:
     """Отправляет уведомление об одном новом алерте.
 
+    Важное улучшение: все пользовательские/модельные поля HTML-экранируются,
+    чтобы случайные символы не ломали разметку Telegram.
+
     Args:
         alert_type: Тип угрозы/аномалии.
         probability: Риск/вероятность (0..1).
@@ -123,15 +296,19 @@ def notify_new_alert(alert_type: str, probability: float, source_ip: Optional[st
     Returns:
         True, если хотя бы один канал принял сообщение.
     """
-    ip = f" (IP: {source_ip})" if source_ip else ""
-    msg = (
-        f"<b>УГРОЗА!</b>\n"
-        f"Тип: <code>{alert_type}</code>\n"
-        f"Вероятность: <b>{probability:.1%}</b>{ip}"
-    )
+    alert_type_safe = html.escape(str(alert_type))
+    ip_safe = html.escape(str(source_ip)) if source_ip else ""
+    ip_part = f" (IP: {ip_safe})" if ip_safe else ""
+
+    msg = textwrap.dedent(
+        f"""\
+        <b>УГРОЗА!</b>
+        Тип: <code>{alert_type_safe}</code>
+        Вероятность: <b>{probability:.1%}</b>{ip_part}
+        """
+    ).strip()
 
     ok = send_telegram(msg)
-    # При желании можно включить email:
     # ok = ok or send_email("PreVisor: Новая угроза", msg)
     return ok
 
@@ -149,8 +326,8 @@ def notify_pipeline_summary(
 
     Args:
         model_type: Идентификатор модели ("rf"/"xgb"/...).
-        total_alerts: Общее число обработанных записей (длина списка alerts).
-        new_alerts: Число новых/сохранённых алертов (где alert == 1).
+        total_alerts: Общее число записей в result.alerts.
+        new_alerts: Число сохранённых алертов (где alert == 1).
         telegram_sent: Сколько индивидуальных уведомлений ушло в Telegram.
         top_types: Топ типов алертов (тип, количество).
         max_probability: Максимальная вероятность среди алертов (если есть).
@@ -158,17 +335,20 @@ def notify_pipeline_summary(
     Returns:
         True, если сводка отправлена, иначе False.
     """
-    top_str = ", ".join([f"{t}: {c}" for t, c in top_types]) if top_types else "—"
-    max_str = f"{max_probability:.1%}" if max_probability is not None else "—"
+    top_str = ", ".join([f"{html.escape(str(t))}: {int(c)}" for t, c in top_types]) if top_types else "—"
+    max_str = f"{float(max_probability):.1%}" if max_probability is not None else "—"
+    model_safe = html.escape(str(model_type))
 
-    msg = (
-        f"<b>PreVisor: сводка запуска</b>\n"
-        f"Модель: <code>{model_type}</code>\n"
-        f"Всего записей: <b>{total_alerts}</b>\n"
-        f"Новых алертов: <b>{new_alerts}</b>\n"
-        f"Отправлено в Telegram: <b>{telegram_sent}</b>\n"
-        f"Макс. вероятность: <b>{max_str}</b>\n"
-        f"Топ типов: <code>{top_str}</code>"
-    )
+    msg = textwrap.dedent(
+        f"""\
+        <b>PreVisor: сводка запуска</b>
+        Модель: <code>{model_safe}</code>
+        Всего записей: <b>{int(total_alerts)}</b>
+        Новых алертов: <b>{int(new_alerts)}</b>
+        Отправлено в Telegram: <b>{int(telegram_sent)}</b>
+        Макс. вероятность: <b>{max_str}</b>
+        Топ типов: <code>{top_str}</code>
+        """
+    ).strip()
 
     return send_telegram(msg)

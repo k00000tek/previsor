@@ -2,20 +2,14 @@ from __future__ import annotations
 
 import argparse
 import logging
-import sys
-from pathlib import Path
-from typing import List, Optional
+import os
+from typing import List
 
 import joblib
 import pandas as pd
-from sklearn.ensemble import IsolationForest
 
-# --- Bootstrap imports: чтобы работало при запуске `python scripts/...` на Windows ---
-PROJECT_ROOT = Path(__file__).resolve().parents[1]  # .../previsor
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-# -------------------------------------------------------------------------------
-
+import config as cfg
+from modules.anomaly_detector import AnomalyDetector
 from modules.preprocessor import preprocess_data
 
 logger = logging.getLogger(__name__)
@@ -23,73 +17,75 @@ if not logging.getLogger().handlers:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
-def _models_runtime_dir(root: Path) -> Path:
-    """Возвращает директорию для runtime-артефактов (анomaly baseline).
+def _align_features(X: pd.DataFrame, feature_schema_path: str) -> pd.DataFrame:
+    """Выравнивает X по схеме признаков обучения (feature schema).
+
+    Это нужно, чтобы IsolationForest обучался на том же наборе/порядке признаков,
+    который использует пайплайн при инференсе.
 
     Args:
-        root: Корень проекта.
+        X: Матрица признаков.
+        feature_schema_path: Путь к сохранённому списку колонок.
 
     Returns:
-        Путь к models/runtime.
+        Выравненный DataFrame.
     """
-    d = root / "models" / "runtime"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+    if not feature_schema_path or not os.path.exists(feature_schema_path):
+        logger.warning("feature schema не найдена (%s) — обучение baseline будет без align", feature_schema_path)
+        return X
+
+    feature_cols = joblib.load(feature_schema_path)
+    if not isinstance(feature_cols, (list, tuple)) or not all(isinstance(c, str) for c in feature_cols):
+        logger.warning("Некорректный формат feature schema (%s) — пропускаю align", type(feature_cols))
+        return X
+
+    X = X.copy()
+    for col in feature_cols:
+        if col not in X.columns:
+            X[col] = 0.0
+
+    # удаляем лишние и фиксируем порядок
+    return X[list(feature_cols)]
 
 
-def _default_input(root: Path) -> Path:
-    """Дефолтный CSV для обучения baseline аномалий."""
-    return root / "data" / "runtime" / "collected_traffic.csv"
-
-
-def main(argv: Optional[List[str]] = None) -> None:
-    """CLI обучения IsolationForest baseline.
-
-    Примеры:
-        python scripts/train_anomaly_baseline.py --input data/runtime/collected_traffic.csv
-        python scripts/train_anomaly_baseline.py --input data/runtime/datasets/cicids2017_processed.csv
-    """
-    parser = argparse.ArgumentParser(description="PreVisor: обучение baseline аномалий (IsolationForest)")
-    parser.add_argument("--input", default=None, help="Путь к CSV. По умолчанию data/runtime/collected_traffic.csv")
-    parser.add_argument("--contamination", type=float, default=0.10, help="Доля аномалий (0..0.5).")
-    parser.add_argument("--n_estimators", type=int, default=200, help="Количество деревьев.")
-    args = parser.parse_args(argv)
-
-    root = PROJECT_ROOT
-    models_dir = _models_runtime_dir(root)
-
-    input_path = Path(args.input).expanduser().resolve() if args.input else _default_input(root)
-    if not input_path.exists():
-        raise RuntimeError(
-            f"Файл не найден: {input_path}\n"
-            "Подсказка: для baseline можно временно использовать любой processed CSV из data/runtime/datasets/..."
-        )
-
-    df = pd.read_csv(input_path, low_memory=False)
-
-    # Для baseline аномалий метка не нужна → inference-предобработка
-    result = preprocess_data(df, purpose="inference", save_csv=False)
-
-    X = result.get("X")
-    if X is None:
-        processed_df = result.get("processed_df")
-        if processed_df is None:
-            raise RuntimeError("Предобработка не вернула X/processed_df.")
-        X = processed_df.select_dtypes(include=["number"]).copy()
-
-    model = IsolationForest(
-        n_estimators=int(args.n_estimators),
-        contamination=float(args.contamination),
-        random_state=42,
-        n_jobs=-1,
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Train IsolationForest baseline for PreVisor")
+    parser.add_argument(
+        "--input",
+        default=getattr(cfg, "BASELINE_TRAFFIC_CSV", os.path.join(cfg.DATA_RUNTIME_DIR, "baseline_traffic.csv")),
+        help="Path to baseline_traffic.csv (raw collected traffic)",
     )
-    model.fit(X)
+    return parser.parse_args()
 
-    out_path = models_dir / "isolation_forest.pkl"
-    joblib.dump(model, out_path)
-    logger.info("IsolationForest baseline сохранён: %s", out_path)
-    print("IsolationForest baseline обучен и сохранён")
+
+def main() -> int:
+    args = _parse_args()
+    input_path = str(args.input)
+
+    if not os.path.exists(input_path):
+        logger.error("Baseline CSV не найден: %s", input_path)
+        return 2
+
+    df = pd.read_csv(input_path)
+    if df.empty:
+        logger.error("Baseline CSV пустой: %s", input_path)
+        return 3
+
+    pre = preprocess_data(df, purpose="inference", save_csv=False)
+    X = pre.get("X")
+    if not isinstance(X, pd.DataFrame) or X.empty:
+        logger.error("Не удалось получить матрицу признаков X из baseline (проверьте формат входных данных)")
+        return 4
+
+    X = _align_features(X, getattr(cfg, "FEATURE_SCHEMA_PATH", ""))
+
+    det = AnomalyDetector(model_path=getattr(cfg, "IFOREST_MODEL_PATH", os.path.join(cfg.MODELS_RUNTIME_DIR, "isolation_forest.pkl")))
+    det.fit(X)
+
+    logger.info("Baseline IsolationForest сохранён: %s", det.model_path)
+    logger.info("Для включения детектора в пайплайне установите ANOMALY_ENABLED=1")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
