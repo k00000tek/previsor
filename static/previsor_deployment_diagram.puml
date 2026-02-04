@@ -12,29 +12,31 @@ skinparam artifact {
   BorderColor #999
 }
 
-' === Узлы ===
-node "Клиентская машина\n(Client Device)" as Client {
-    artifact "Веб-браузер\n(Browser)" as Browser
+node "ПК пользователя\n(Windows)" as Client {
+    artifact "Браузер\n(Browser)" as Browser
+    artifact "Flask-приложение\n(app.py)" as FlaskApp
+    artifact "Модули анализа\n(modules/*)" as AnalyzerMods
+    artifact "SQLite DB\n(db/runtime/previsor.db)" as DB
 }
 
-node "Сервер приложений\n(Application Server)" as Server {
-    artifact "Flask-приложение\n(previsor_app.py)" as Flask
-    artifact "Модуль анализа\n(analysis.py)" as Analyzer
-    artifact "Модуль предобработки\n(preprocess.py)" as Preproc
+node "Опционально" as Optional {
+    artifact "Celery worker\n(celery_app.py)" as CeleryApp
+    artifact "Redis broker" as Redis
 }
 
-node "Сервер БД\n(Database Server)" as DBServer {
-    artifact "PostgreSQL / SQLite\n(database.db)" as DB
+cloud "Внешние сервисы" as Cloud {
+    artifact "AbuseIPDB\nHTTP API" as TI
+    artifact "Telegram Bot" as Notif
 }
 
-cloud "Внешние сервисы (опционально)\n(Threat Intelligence API)" as Cloud
+Browser --> FlaskApp : HTTP
+FlaskApp --> AnalyzerMods : анализ/предобработка
+FlaskApp --> DB : SQL
+AnalyzerMods --> DB : alerts/logs
+AnalyzerMods --> TI : репутация IP (опционально)
+AnalyzerMods --> Notif : уведомления
 
-' === Связи ===
-Browser --> Flask : HTTP(S)\nЗапросы пользователя
-Flask --> Analyzer : API вызовы / ML-анализ
-Analyzer --> Preproc : Предобработка данных
-Analyzer --> DB : Сохранение результатов
-Flask --> DB : Запрос данных для визуализации
-Analyzer .-> Cloud : Проверка IP / контента (опционально)
+CeleryApp --> Redis : broker
+CeleryApp --> AnalyzerMods : плановые задачи
 
 @enduml

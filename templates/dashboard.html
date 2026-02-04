@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PreVisor Dashboard</title>
+  <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body { padding: 20px; }
+    .card { margin-bottom: 20px; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+    .small-muted { font-size: 0.9rem; color: #6c757d; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="d-flex justify-content-between align-items-end mb-3">
+      <div>
+        <h1 class="mb-0">PreVisor — мониторинг угроз</h1>
+        <div class="small-muted">Последнее обновление: <span id="lastRefresh" class="mono">—</span></div>
+      </div>
+      <div>
+        <button class="btn btn-outline-secondary" onclick="loadAlerts()">Обновить сейчас</button>
+      </div>
+    </div>
+
+    <!-- Панель запуска анализа / сбор baseline -->
+    <div class="card mb-4">
+      <div class="card-body row g-3 align-items-end">
+        <div class="col-md-4">
+          <label class="form-label">Файл для анализа (опционально)</label>
+          <input type="file" id="fileInput" class="form-control">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label">Режим</label>
+          <select id="runMode" class="form-select">
+            <option value="real">real</option>
+            {% if enable_dev_ui %}
+            <option value="demo">demo</option>
+            <option value="test">test</option>
+            <option value="dataset">dataset</option>
+            {% endif %}
+          </select>
+        </div>
+        <div class="col-md-2">
+          <label class="form-label">Модель</label>
+          <select id="runModel" class="form-select">
+            <option value="rf">rf</option>
+            <option value="xgb">xgb</option>
+          </select>
+        </div>
+        <div class="col-md-2">
+          <button class="btn btn-primary w-100" onclick="runAnalysis()">Запустить анализ</button>
+        </div>
+        <div class="col-md-2">
+          <button class="btn btn-outline-primary w-100" onclick="collectBaseline()">Собрать базовую выборку</button>
+        </div>
+
+        <div class="col-12 small-muted">
+          <div id="runResult">Сводка последнего запуска: —</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="row">
+      <!-- График по типам -->
+      <div class="col-md-6">
+        <div class="card">
+          <div class="card-header">Алерты по типам</div>
+          <div class="card-body">
+            <div id="typeChart" style="height: 320px;"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- График по времени -->
+      <div class="col-md-6">
+        <div class="card">
+          <div class="card-header">Алерты по часам</div>
+          <div class="card-body">
+            <div id="timeChart" style="height: 320px;"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card mt-3">
+      <div class="card-header">Типы угроз (кратко)</div>
+      <div class="card-body small-muted">
+        <div>Suspicious Port — повторяющиеся обращения к типичным «рискованным» портам.</div>
+        <div>Port Scanning — множество уникальных портов от одного источника за короткий интервал.</div>
+        <div>DDoS — всплеск пакетов от большого числа источников к одной цели.</div>
+        <div>HTTP Anomaly — признаки подозрительных запросов (паттерны инъекций и т.п.).</div>
+        <div>Anomaly — аномалия по модели IsolationForest.</div>
+      </div>
+    </div>
+
+    <!-- Фильтры -->
+    <div class="card mt-4">
+      <div class="card-body row g-3 align-items-end">
+        <div class="col-md-4">
+          <label class="form-label">Тип</label>
+          <select id="filterType" onchange="loadAlerts()" class="form-select">
+            <option value="">Все типы</option>
+          </select>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Статус</label>
+          <select id="filterStatus" onchange="loadAlerts()" class="form-select">
+            <option value="">Все</option>
+            <option value="new">new</option>
+            <option value="acknowledged">acknowledged</option>
+            <option value="false_positive">false_positive</option>
+          </select>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Мин. риск, %</label>
+          <input type="number" id="filterMinProb" class="form-control" value="0" min="0" max="100" step="1" onchange="loadAlerts()">
+        </div>
+      </div>
+    </div>
+
+    <!-- Таблица алертов -->
+    <div class="card mt-3">
+      <div class="card-header">Последние алерты</div>
+      <div class="card-body">
+        <div class="table-responsive">
+          <table class="table table-sm table-hover align-middle">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Время</th>
+                <th>Тип</th>
+                <th>Риск</th>
+                <th>IP</th>
+                <th>Статус</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="alertsTable"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function fmtTs(ts) {
+      if (!ts) return '—';
+      const d = new Date(ts);
+      if (isNaN(d.getTime())) return String(ts);
+      return d.toLocaleString();
+    }
+
+    function badgeClassByStatus(status) {
+      if (status === 'acknowledged') return 'bg-success';
+      if (status === 'false_positive') return 'bg-secondary';
+      return 'bg-danger';
+    }
+
+    async function updateStatus(alertId, newStatus) {
+      const res = await fetch(`/alerts/${alertId}/status`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: newStatus })
+      });
+      if (!res.ok) {
+        const t = await res.text();
+        alert(`Ошибка обновления статуса (${res.status}): ${t}`);
+        return;
+      }
+      await loadAlerts();
+    }
+
+    async function loadAlerts() {
+      const type = document.getElementById('filterType').value;
+      const status = document.getElementById('filterStatus').value;
+      const minProb = Number(document.getElementById('filterMinProb').value) / 100;
+
+      const q = new URLSearchParams();
+      if (type) q.set('type', type);
+      if (status) q.set('status', status);
+      q.set('limit', '100');
+
+      const res = await fetch(`/alerts?${q.toString()}`);
+      const alerts = await res.json();
+
+      const filtered = alerts.filter(a => {
+        if (!isNaN(minProb) && minProb > 0) {
+          return Number(a.probability || 0) >= minProb;
+        }
+        return true;
+      });
+
+      const tbody = document.getElementById('alertsTable');
+      tbody.innerHTML = filtered.map(a => `
+        <tr>
+          <td class="mono">${a.id}</td>
+          <td>${fmtTs(a.timestamp)}</td>
+          <td><span class="badge bg-danger">${a.type}</span></td>
+          <td>${(Number(a.probability || 0) * 100).toFixed(1)}%</td>
+          <td class="mono">${a.source_ip || '-'}</td>
+          <td><span class="badge ${badgeClassByStatus(a.status)}">${a.status}</span></td>
+          <td>
+            <div class="btn-group btn-group-sm" role="group">
+              <button class="btn btn-outline-success" onclick="updateStatus(${a.id}, 'acknowledged')">ACK</button>
+              <button class="btn btn-outline-secondary" onclick="updateStatus(${a.id}, 'false_positive')">False Positive</button>
+            </div>
+          </td>
+        </tr>
+      `).join('');
+
+      updateCharts(filtered);
+      updateFilterOptions(alerts);
+
+      document.getElementById('lastRefresh').textContent = new Date().toLocaleString();
+    }
+
+    function updateCharts(alerts) {
+      const byType = {};
+      alerts.forEach(a => {
+        const t = a.type || 'Unknown';
+        byType[t] = (byType[t] || 0) + 1;
+      });
+
+      Plotly.newPlot('typeChart', [{
+        x: Object.keys(byType),
+        y: Object.values(byType),
+        type: 'bar'
+      }], {
+        title: 'Количество алертов по типам',
+        margin: { t: 40, l: 40, r: 10, b: 60 }
+      });
+
+      const byHour = {};
+      alerts.forEach(a => {
+        const d = new Date(a.timestamp);
+        if (isNaN(d.getTime())) return;
+        const h = d.getHours();
+        byHour[h] = (byHour[h] || 0) + 1;
+      });
+
+      const hours = Object.keys(byHour)
+        .map(h => Number(h))
+        .sort((a, b) => a - b)
+        .map(h => h.toString());
+
+      Plotly.newPlot('timeChart', [{
+        x: hours,
+        y: hours.map(h => byHour[h]),
+        type: 'bar'
+      }], {
+        title: 'Алерты по часам',
+        xaxis: { title: 'Часы' },
+        yaxis: { title: 'Количество' },
+        margin: { t: 40, l: 40, r: 10, b: 60 }
+      });
+    }
+
+    function updateFilterOptions(alerts) {
+      const types = [...new Set(alerts.map(a => a.type))].filter(Boolean).sort();
+      const select = document.getElementById('filterType');
+
+      const current = select.value;
+      select.innerHTML = '<option value="">Все типы</option>' +
+        types.map(t => `<option value="${t}">${t}</option>`).join('');
+      if (types.includes(current)) select.value = current;
+    }
+
+    async function runAnalysis() {
+      const file = document.getElementById('fileInput').files[0];
+      const mode = document.getElementById('runMode').value;
+      const model = document.getElementById('runModel').value;
+
+      const url = `/analyze?mode=${encodeURIComponent(mode)}&model=${encodeURIComponent(model)}`;
+
+      let res;
+      if (file) {
+        const form = new FormData();
+        form.append('file', file);
+        res = await fetch(url, { method: 'POST', body: form });
+      } else {
+        res = await fetch(url, { method: 'POST' });
+      }
+
+      const data = await res.json();
+      if (!res.ok) {
+        alert(`Ошибка запуска: ${JSON.stringify(data)}`);
+        return;
+      }
+
+      document.getElementById('runResult').textContent =
+        `mode=${data.mode}, model=${data.model}, new_alerts=${data.new_alerts}, total_alerts=${data.total_alerts}, telegram_sent=${data.telegram_sent}`;
+
+      await loadAlerts();
+    }
+
+    async function collectBaseline() {
+      const url = `/collect?mode=real&baseline=1&rows=200`;
+      const res = await fetch(url);
+      const data = await res.json();
+      if (!res.ok) {
+        alert(`Ошибка baseline-сбора: ${JSON.stringify(data)}`);
+        return;
+      }
+      document.getElementById('runResult').textContent =
+        `Базовая выборка: rows=${data.rows}, csv=${data.csv}`;
+    }
+
+    setInterval(loadAlerts, 30000);
+    loadAlerts();
+  </script>
+</body>
+</html>

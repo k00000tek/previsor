@@ -1,6 +1,44 @@
-.venv/
-.idea/
+# Python
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
+.pytest_cache/
+.venv/
+env/
+venv/
+.env
+.env.*
+
+# OS/IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Test/coverage
+.coverage
+htmlcov/
+.coverage.*
+.pytest_cache/
+
+# Runtime artifacts
+celerybeat-schedule
+*.log
+
+# SQLite/runtime DB
+db/runtime/
+db/*.db
+
+# Runtime models
+models/runtime/
+models/*.pkl
+models/*.txt
+
+# Runtime data (generated)
+data/runtime/
+
+# Big / temporary datasets
+utils/tmp_kaggle/
+data/**/*.zip
+
+/results
+/docx

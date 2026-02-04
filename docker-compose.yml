@@ -1,0 +1,118 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  web:
+    build: .
+    command: gunicorn -b 0.0.0.0:5000 app:app --workers 2 --threads 4 --timeout 120
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+
+      # Основной режим для приложения (рекомендуется real для пользовательского сценария)
+      - PREVISOR_MODE=${PREVISOR_MODE:-real}
+      - PREVISOR_MODEL=${PREVISOR_MODEL:-rf}
+
+      # Интервал автопрогона (использует Celery beat)
+      - PREVISOR_COLLECTION_INTERVAL=${PREVISOR_COLLECTION_INTERVAL:-300}
+
+      # Runtime-пути внутри контейнера (соответствуют config.py)
+      - PREVISOR_DATA_RUNTIME_DIR=/app/data/runtime
+      - PREVISOR_MODELS_RUNTIME_DIR=/app/models/runtime
+      - PREVISOR_DB_PATH=/app/db/runtime/previsor.db
+
+      # Сетевой интерфейс (для режима real, если используешь sniff)
+      - PREVISOR_NET_IFACE=${PREVISOR_NET_IFACE:-}
+
+      # Детектор аномалий
+      - PREVISOR_ANOMALY_ENABLED=${PREVISOR_ANOMALY_ENABLED:-0}
+
+      # Интеграции (опционально)
+      - ABUSEIPDB_KEY=${ABUSEIPDB_KEY:-}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      - PREVISOR_TELEGRAM_ENABLED=${PREVISOR_TELEGRAM_ENABLED:-true}
+      - MAX_TELEGRAM_ALERTS_PER_RUN=${MAX_TELEGRAM_ALERTS_PER_RUN:-5}
+
+      # dev-only эндпоинты (например /alerts/purge)
+      - PREVISOR_ENABLE_DEV_ENDPOINTS=${PREVISOR_ENABLE_DEV_ENDPOINTS:-true}
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./data/runtime:/app/data/runtime
+      - ./db/runtime:/app/db/runtime
+      - ./models/runtime:/app/models/runtime
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: .
+    command: celery -A celery_app.celery worker --loglevel=INFO --pool=solo
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+
+      - PREVISOR_MODE=${PREVISOR_MODE:-real}
+      - PREVISOR_MODEL=${PREVISOR_MODEL:-rf}
+      - PREVISOR_COLLECTION_INTERVAL=${PREVISOR_COLLECTION_INTERVAL:-300}
+
+      - PREVISOR_DATA_RUNTIME_DIR=/app/data/runtime
+      - PREVISOR_MODELS_RUNTIME_DIR=/app/models/runtime
+      - PREVISOR_DB_PATH=/app/db/runtime/previsor.db
+
+      - PREVISOR_NET_IFACE=${PREVISOR_NET_IFACE:-}
+
+      - PREVISOR_ANOMALY_ENABLED=${PREVISOR_ANOMALY_ENABLED:-0}
+
+      - ABUSEIPDB_KEY=${ABUSEIPDB_KEY:-}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      - PREVISOR_TELEGRAM_ENABLED=${PREVISOR_TELEGRAM_ENABLED:-true}
+      - MAX_TELEGRAM_ALERTS_PER_RUN=${MAX_TELEGRAM_ALERTS_PER_RUN:-5}
+
+      - C_FORCE_ROOT=1
+    volumes:
+      - ./data/runtime:/app/data/runtime
+      - ./db/runtime:/app/db/runtime
+      - ./models/runtime:/app/models/runtime
+    depends_on:
+      redis:
+        condition: service_healthy
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+
+  beat:
+    build: .
+    command: celery -A celery_app.celery beat -l INFO
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+
+      - PREVISOR_MODE=${PREVISOR_MODE:-real}
+      - PREVISOR_MODEL=${PREVISOR_MODEL:-rf}
+      - PREVISOR_COLLECTION_INTERVAL=${PREVISOR_COLLECTION_INTERVAL:-300}
+
+      - PREVISOR_DATA_RUNTIME_DIR=/app/data/runtime
+      - PREVISOR_MODELS_RUNTIME_DIR=/app/models/runtime
+      - PREVISOR_DB_PATH=/app/db/runtime/previsor.db
+
+      - PREVISOR_ANOMALY_ENABLED=${PREVISOR_ANOMALY_ENABLED:-0}
+
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      - PREVISOR_TELEGRAM_ENABLED=${PREVISOR_TELEGRAM_ENABLED:-true}
+
+      - C_FORCE_ROOT=1
+    volumes:
+      - ./data/runtime:/app/data/runtime
+      - ./db/runtime:/app/db/runtime
+      - ./models/runtime:/app/models/runtime
+    depends_on:
+      redis:
+        condition: service_healthy

@@ -1,0 +1,53 @@
+@startuml
+title ER-диаграмма БД PreVisor
+
+hide circle
+hide methods
+hide stereotypes
+
+skinparam entity {
+  BackgroundColor White
+  BorderColor #555555
+  FontColor #111111
+}
+
+entity "ip_cache" as IPCache {
+  * ip : VARCHAR <<PK>>
+  --
+  reputation : FLOAT
+  last_check : DATETIME
+  source : VARCHAR
+}
+
+entity "alerts" as Alerts {
+  * id : INTEGER <<PK>>
+  --
+  timestamp  : DATETIME
+  alert_type : VARCHAR
+  probability: FLOAT
+  source_ip  : VARCHAR
+  status     : VARCHAR
+}
+
+entity "traffic_logs" as TrafficLogs {
+  * id : INTEGER <<PK>>
+  --
+  timestamp  : DATETIME
+  source_ip  : VARCHAR
+  dest_ip    : VARCHAR
+  protocol   : INTEGER
+  src_port   : INTEGER
+  dest_port  : INTEGER
+  packet_len : INTEGER
+  ttl        : INTEGER
+  tcp_flags  : INTEGER
+  http_method: VARCHAR
+  mode       : VARCHAR
+}
+
+note right of Alerts
+Связи с ip_cache и traffic_logs
+логические (FK не используются).
+end note
+
+@enduml
