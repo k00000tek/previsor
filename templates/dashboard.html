@@ -36,9 +36,11 @@
           <label class="form-label">Режим</label>
           <select id="runMode" class="form-select">
             <option value="real">real</option>
+            {% if enable_dev_ui %}
             <option value="demo">demo</option>
             <option value="test">test</option>
             <option value="dataset">dataset</option>
+            {% endif %}
           </select>
         </div>
         <div class="col-md-2">
@@ -52,7 +54,7 @@
           <button class="btn btn-primary w-100" onclick="runAnalysis()">Запустить анализ</button>
         </div>
         <div class="col-md-2">
-          <button class="btn btn-outline-primary w-100" onclick="collectBaseline()">Baseline (real)</button>
+          <button class="btn btn-outline-primary w-100" onclick="collectBaseline()">Собрать базовую выборку</button>
         </div>
 
         <div class="col-12 small-muted">
@@ -83,6 +85,17 @@
       </div>
     </div>
 
+    <div class="card mt-3">
+      <div class="card-header">Типы угроз (кратко)</div>
+      <div class="card-body small-muted">
+        <div>Suspicious Port — повторяющиеся обращения к типичным «рискованным» портам.</div>
+        <div>Port Scanning — множество уникальных портов от одного источника за короткий интервал.</div>
+        <div>DDoS — всплеск пакетов от большого числа источников к одной цели.</div>
+        <div>HTTP Anomaly — признаки подозрительных запросов (паттерны инъекций и т.п.).</div>
+        <div>Anomaly — аномалия по модели IsolationForest.</div>
+      </div>
+    </div>
+
     <!-- Фильтры -->
     <div class="card mt-4">
       <div class="card-body row g-3 align-items-end">
@@ -98,7 +111,7 @@
             <option value="">Все</option>
             <option value="new">new</option>
             <option value="acknowledged">acknowledged</option>
-            <option value="ignored">ignored</option>
+            <option value="false_positive">false_positive</option>
           </select>
         </div>
         <div class="col-md-4">
@@ -142,7 +155,7 @@
 
     function badgeClassByStatus(status) {
       if (status === 'acknowledged') return 'bg-success';
-      if (status === 'ignored') return 'bg-secondary';
+      if (status === 'false_positive') return 'bg-secondary';
       return 'bg-danger';
     }
 
@@ -192,7 +205,7 @@
           <td>
             <div class="btn-group btn-group-sm" role="group">
               <button class="btn btn-outline-success" onclick="updateStatus(${a.id}, 'acknowledged')">ACK</button>
-              <button class="btn btn-outline-secondary" onclick="updateStatus(${a.id}, 'ignored')">Ignore</button>
+              <button class="btn btn-outline-secondary" onclick="updateStatus(${a.id}, 'false_positive')">False Positive</button>
             </div>
           </td>
         </tr>
@@ -291,7 +304,8 @@
         alert(`Ошибка baseline-сбора: ${JSON.stringify(data)}`);
         return;
       }
-      document.getElementById('runResult').textContent = `Baseline append: rows=${data.rows}, csv=${data.csv}`;
+      document.getElementById('runResult').textContent =
+        `Базовая выборка: rows=${data.rows}, csv=${data.csv}`;
     }
 
     setInterval(loadAlerts, 30000);

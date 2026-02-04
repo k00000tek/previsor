@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import time
-from typing import Optional, Literal
+from typing import Optional, Literal, List
 
 import numpy as np
 import pandas as pd
@@ -28,12 +28,24 @@ from config import (
 
 # Scapy может быть недоступен в некоторых окружениях; импортируем безопасно.
 try:
-    from scapy.all import sniff  # type: ignore
+    from scapy.all import sniff, get_if_list, conf  # type: ignore
+    try:  # Windows-only helper
+        from scapy.arch.windows import get_windows_if_list  # type: ignore
+    except Exception:  # pragma: no cover
+        get_windows_if_list = None  # type: ignore
     from scapy.layers.inet import IP, TCP, UDP  # type: ignore
+    try:
+        from scapy.layers.inet6 import IPv6  # type: ignore
+    except Exception:  # pragma: no cover
+        IPv6 = None  # type: ignore
     from scapy.layers.http import HTTPRequest  # type: ignore
 except Exception:  # pragma: no cover
     sniff = None  # type: ignore
+    get_if_list = None  # type: ignore
+    conf = None  # type: ignore
+    get_windows_if_list = None  # type: ignore
     IP = TCP = UDP = HTTPRequest = None  # type: ignore
+    IPv6 = None  # type: ignore
 
 logger = logging.getLogger(__name__)
 if not logging.getLogger().handlers:
@@ -121,19 +133,28 @@ def collect_real_traffic(
             "Scapy недоступен в окружении. Проверьте, что он установлен и импортируется корректно."
         )
 
+    iface = _resolve_iface_name(iface)
+
     rows: list[dict] = []
 
     def packet_handler(pkt) -> None:
-        if IP is None or IP not in pkt:
+        """Обрабатывает один пакет и добавляет строку в rows."""
+        if (IP is None or IP not in pkt) and (IPv6 is None or IPv6 not in pkt):
             return
 
         ts = pd.to_datetime(time.time(), unit="s")
-        src_ip = pkt[IP].src
+        if IP is not None and IP in pkt:
+            src_ip = pkt[IP].src
+            dst_ip = pkt[IP].dst
+            proto = int(getattr(pkt[IP], "proto", 0))
+        else:
+            src_ip = pkt[IPv6].src  # type: ignore[index]
+            dst_ip = pkt[IPv6].dst  # type: ignore[index]
+            proto = int(getattr(pkt[IPv6], "nh", 0))  # type: ignore[index]
 
-        proto = 0
-        src_port = None
-        dst_port = None
-        tcp_flags = None
+        src_port = 0
+        dst_port = 0
+        tcp_flags = 0
 
         if TCP is not None and TCP in pkt:
             proto = 6
@@ -142,37 +163,58 @@ def collect_real_traffic(
             try:
                 tcp_flags = int(pkt[TCP].flags)
             except Exception:
-                tcp_flags = None
+                tcp_flags = 0
         elif UDP is not None and UDP in pkt:
             proto = 17
             src_port = int(pkt[UDP].sport)
             dst_port = int(pkt[UDP].dport)
         else:
-            proto = int(getattr(pkt[IP], "proto", 0))
+            proto = proto
 
         http_method = None
+        http_host = None
+        http_path = None
+        http_url = None
         if HTTPRequest is not None and HTTPRequest in pkt and getattr(pkt[HTTPRequest], "Method", None):
             try:
                 http_method = pkt[HTTPRequest].Method.decode(errors="ignore")
             except Exception:
                 http_method = None
+            try:
+                raw_host = getattr(pkt[HTTPRequest], "Host", None)
+                http_host = raw_host.decode(errors="ignore") if raw_host else None
+            except Exception:
+                http_host = None
+            try:
+                raw_path = getattr(pkt[HTTPRequest], "Path", None)
+                http_path = raw_path.decode(errors="ignore") if raw_path else None
+            except Exception:
+                http_path = None
+            if http_host and http_path:
+                http_url = f"http://{http_host}{http_path}"
 
-        pkt_len = None
+        pkt_len = 0
         try:
             pkt_len = int(len(pkt))
         except Exception:
-            pkt_len = None
+            pkt_len = 0
 
-        ttl = None
+        ttl = 0
         try:
-            ttl = int(getattr(pkt[IP], "ttl", 0))
+            if IP is not None and IP in pkt:
+                ttl = int(getattr(pkt[IP], "ttl", 0))
+            elif IPv6 is not None and IPv6 in pkt:
+                ttl = int(getattr(pkt[IPv6], "hlim", 0))
+            else:
+                ttl = 0
         except Exception:
-            ttl = None
+            ttl = 0
 
         rows.append(
             {
                 "timestamp": ts,
                 "source_ip": src_ip,
+                "dest_ip": dst_ip,
                 "protocol": proto,          # 6=TCP, 17=UDP, прочее=другое
                 "src_port": src_port,
                 "dest_port": dst_port,
@@ -181,6 +223,8 @@ def collect_real_traffic(
                 "tcp_flags": tcp_flags,
                 "packet_count": 1,
                 "http_method": http_method,
+                "host": http_host,
+                "url": http_url,
                 # В real метки нет → ставим "Normal Traffic", чтобы не падал LabelEncoder в inference
                 "Attack Type": "Normal Traffic",
             }
@@ -197,6 +241,7 @@ def collect_real_traffic(
         "count": int(num_packets),
         "timeout": int(timeout_sec),
         "store": False,
+        "promisc": True,
     }
     if bpf_filter:
         sniff_kwargs["filter"] = bpf_filter
@@ -204,10 +249,14 @@ def collect_real_traffic(
     sniff(**sniff_kwargs)  # type: ignore
 
     if not rows:
+        logger.warning("Не удалось захватить пакеты на интерфейсе: %s", iface)
+
+    if not rows:
         return pd.DataFrame(
             columns=[
                 "timestamp",
                 "source_ip",
+                "dest_ip",
                 "protocol",
                 "src_port",
                 "dest_port",
@@ -216,6 +265,8 @@ def collect_real_traffic(
                 "tcp_flags",
                 "packet_count",
                 "http_method",
+                "host",
+                "url",
                 "Attack Type",
             ]
         )
@@ -239,6 +290,7 @@ def collect_simulated_traffic(*, num_rows: int) -> pd.DataFrame:
     for _ in range(int(num_rows)):
         ts = fake.date_time_this_year()
         src_ip = fake.ipv4()
+        dst_ip = fake.ipv4()
 
         proto = int(np.random.choice([6, 17], p=[0.75, 0.25]))
         src_port = int(np.random.randint(1024, 65536))
@@ -251,6 +303,7 @@ def collect_simulated_traffic(*, num_rows: int) -> pd.DataFrame:
             {
                 "timestamp": ts,
                 "source_ip": src_ip,
+                "dest_ip": dst_ip,
                 "protocol": proto,
                 "src_port": src_port,
                 "dest_port": dst_port,
@@ -264,6 +317,115 @@ def collect_simulated_traffic(*, num_rows: int) -> pd.DataFrame:
         )
 
     return pd.DataFrame(rows)
+
+
+def list_network_interfaces(details: bool = False) -> List[dict] | List[str]:
+    """Возвращает список доступных интерфейсов (если Scapy доступен).
+
+    Args:
+        details: Если True, вернуть список словарей с name/description/guid.
+    """
+    if get_if_list is None:
+        return []
+    try:
+        if details and get_windows_if_list is not None:
+            return list(get_windows_if_list())
+        return list(get_if_list())
+    except Exception:
+        return []
+
+
+def _is_link_local(ip: str) -> bool:
+    """Проверяет, является ли IP link-local или loopback."""
+    ip = (ip or "").lower()
+    return ip.startswith("169.254.") or ip.startswith("fe80:") or ip in {"127.0.0.1", "::1"}
+
+
+def _is_virtual_name(name: str) -> bool:
+    """Проверяет, является ли интерфейс виртуальным по имени."""
+    lower = (name or "").lower()
+    bad = ["loopback", "virtual", "hyper-v", "vbox", "teredo", "miniport", "wsl", "npcap"]
+    return any(b in lower for b in bad)
+
+
+def _auto_iface_from_details(details: List[dict]) -> Optional[str]:
+    """Выбирает интерфейс с реальным IP из подробного списка."""
+    if not details:
+        return None
+    preferred = []
+    fallback = []
+    for item in details:
+        name = str(item.get("name") or "")
+        if not name or _is_virtual_name(name):
+            continue
+        ips = item.get("ips") or []
+        ips = [str(ip) for ip in ips if ip]
+        if any(not _is_link_local(ip) for ip in ips):
+            preferred.append(name)
+        elif ips:
+            fallback.append(name)
+    if preferred:
+        return preferred[0]
+    if fallback:
+        return fallback[0]
+    return None
+
+
+def _auto_iface(interfaces: List[str]) -> Optional[str]:
+    """Выбирает первый не-loopback интерфейс."""
+    if not interfaces:
+        return None
+    for name in interfaces:
+        lower = name.lower()
+        if "loopback" in lower or lower == "lo" or "npcap loopback" in lower:
+            continue
+        return name
+    return interfaces[0] if interfaces else None
+
+
+def _resolve_iface_name(requested: str) -> str:
+    """Возвращает имя интерфейса для Scapy с учетом aliases.
+
+    Args:
+        requested: Запрошенное имя (или "auto").
+
+    Returns:
+        Имя интерфейса, понятное Scapy.
+    """
+    requested = (requested or "").strip()
+    if requested.lower() == "auto" or not requested:
+        details = list_network_interfaces(details=True)
+        auto = _auto_iface_from_details(details) if details else None
+        if auto:
+            return auto
+        interfaces = list_network_interfaces()
+        auto = _auto_iface(interfaces)
+        if auto:
+            return auto
+        raise ValueError("Не удалось автоматически определить интерфейс. Укажи PREVISOR_NET_IFACE вручную.")
+
+    interfaces = list_network_interfaces()
+    if requested in interfaces:
+        return requested
+
+    # Try Windows friendly names/descriptions
+    details = list_network_interfaces(details=True)
+    if details:
+        for item in details:
+            name = str(item.get("name") or "")
+            desc = str(item.get("description") or "")
+            guid = str(item.get("guid") or "")
+            if requested.lower() in {name.lower(), desc.lower(), guid.lower()}:
+                return name
+
+    auto = _auto_iface(interfaces)
+    if auto:
+        logger.warning("Интерфейс '%s' не найден, использую '%s'", requested, auto)
+        return auto
+
+    raise ValueError(
+        "Interface '%s' not found. Доступные интерфейсы: %s" % (requested, ", ".join(interfaces) or "-")
+    )
 
 
 def _collect_from_samples(source: DemoSource, *, num_rows: int) -> Optional[pd.DataFrame]:

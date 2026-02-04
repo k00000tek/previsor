@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
+import time
 from collections import Counter
 from typing import Any, Dict, Optional, List
 
@@ -9,7 +11,7 @@ from flask import Flask, jsonify, render_template, request
 from werkzeug.utils import secure_filename
 
 import config as cfg
-from modules.data_collector import collect_traffic
+from modules.data_collector import collect_traffic, list_network_interfaces
 from modules.database import get_alerts, save_alert, update_alert_status, purge_alerts
 from modules.pipeline import PreVisorPipeline
 
@@ -25,6 +27,32 @@ if not logging.getLogger().handlers:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 app = Flask(__name__)
+
+_monitor_thread: Optional[threading.Thread] = None
+_monitor_stop = threading.Event()
+
+
+def _start_auto_monitor() -> None:
+    """Запускает фоновый мониторинг, если он еще не запущен."""
+    global _monitor_thread
+    if _monitor_thread and _monitor_thread.is_alive():
+        return
+
+    def _loop() -> None:
+        model = os.getenv("PREVISOR_MODEL", "rf").strip().lower()
+        mode = os.getenv("PREVISOR_MODE", getattr(cfg, "MODE", "real")).strip().lower()
+        interval = int(os.getenv("PREVISOR_AUTO_MONITOR_INTERVAL", str(getattr(cfg, "COLLECTION_INTERVAL", 300))))
+        pipeline = PreVisorPipeline(model_type=model)
+        logger.info("Auto monitor started: mode=%s model=%s interval=%ss", mode, model, interval)
+        while not _monitor_stop.is_set():
+            try:
+                pipeline.run(mode=mode, model_type=model)
+            except Exception:
+                logger.exception("Auto monitor run failed")
+            _monitor_stop.wait(max(5, int(interval)))
+
+    _monitor_thread = threading.Thread(target=_loop, name="previsor-auto-monitor", daemon=True)
+    _monitor_thread.start()
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -82,6 +110,8 @@ def _get_data_dir() -> str:
 
 
 DEV_ENDPOINTS_ENABLED = _env_bool("PREVISOR_ENABLE_DEV_ENDPOINTS", True)
+DEV_UI_ENABLED = _env_bool("PREVISOR_ENABLE_DEV_UI", False)
+AUTO_MONITOR_ENABLED = _env_bool("PREVISOR_AUTO_MONITOR", True)
 
 
 @app.route("/health")
@@ -90,16 +120,38 @@ def health():
     return jsonify({"status": "OK"})
 
 
+@app.route("/interfaces")
+def interfaces():
+    """Возвращает список сетевых интерфейсов (для настройки PREVISOR_NET_IFACE)."""
+    details = list_network_interfaces(details=True)
+    if details:
+        return jsonify(details)
+    return jsonify(list_network_interfaces())
+
+
+@app.route("/monitor/status")
+def monitor_status():
+    """Возвращает статус фонового мониторинга."""
+    running = bool(_monitor_thread and _monitor_thread.is_alive())
+    interval = int(os.getenv("PREVISOR_AUTO_MONITOR_INTERVAL", str(getattr(cfg, "COLLECTION_INTERVAL", 300))))
+    return jsonify(
+        {
+            "running": running,
+            "interval_sec": int(interval),
+        }
+    )
+
+
 @app.route("/")
 def index():
     """Главная страница: рендерим дашборд."""
-    return render_template("dashboard.html")
+    return render_template("dashboard.html", enable_dev_ui=DEV_UI_ENABLED)
 
 
 @app.route("/dashboard")
 def dashboard():
     """Рендерит HTML-дашборд."""
-    return render_template("dashboard.html")
+    return render_template("dashboard.html", enable_dev_ui=DEV_UI_ENABLED)
 
 
 @app.route("/collect", methods=["GET"])
@@ -140,7 +192,14 @@ def collect_endpoint():
     else:
         collect_kwargs["demo_rows"] = int(rows)
 
-    df = collect_traffic(**collect_kwargs)  # type: ignore[arg-type]
+    try:
+        df = collect_traffic(**collect_kwargs)  # type: ignore[arg-type]
+    except ValueError as exc:
+        logger.exception("Ошибка /collect (ValueError)")
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        logger.exception("Ошибка /collect")
+        return jsonify({"error": str(exc)}), 500
 
     target_csv = None
     if baseline:
@@ -148,7 +207,19 @@ def collect_endpoint():
     else:
         target_csv = getattr(cfg, "COLLECTED_TRAFFIC_CSV", None)
 
-    return jsonify({"status": "OK", "mode": mode, "baseline": bool(baseline), "rows": int(len(df)), "csv": target_csv})
+    warning = None
+    if int(len(df)) == 0 and mode == "real":
+        warning = "no_packets_captured"
+    return jsonify(
+        {
+            "status": "OK",
+            "mode": mode,
+            "baseline": bool(baseline),
+            "rows": int(len(df)),
+            "csv": target_csv,
+            "warning": warning,
+        }
+    )
 
 
 @app.route("/preprocess", methods=["GET"])
@@ -268,6 +339,9 @@ def analyze_endpoint():
             except Exception:
                 logger.exception("Notification error (notify_pipeline_summary)")
 
+        warning = None
+        if result.processed_df is not None and int(len(result.processed_df)) == 0 and mode == "real":
+            warning = "no_packets_captured"
         return jsonify(
             {
                 "status": "OK",
@@ -277,9 +351,13 @@ def analyze_endpoint():
                 "total_alerts": int(len(result.alerts or [])),
                 "telegram_sent": int(telegram_sent),
                 "alerts": (result.alerts or [])[:10],
+                "warning": warning,
             }
         )
 
+    except ValueError as exc:
+        logger.exception("Ошибка /analyze (ValueError)")
+        return jsonify({"error": str(exc)}), 400
     except Exception as exc:
         logger.exception("Ошибка /analyze")
         return jsonify({"error": str(exc)}), 500
@@ -369,4 +447,6 @@ def purge_alerts_api():
 
 
 if __name__ == "__main__":
+    if AUTO_MONITOR_ENABLED:
+        _start_auto_monitor()
     app.run(host="0.0.0.0", port=5000)

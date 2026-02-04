@@ -14,6 +14,10 @@ from __future__ import annotations
 import os
 from typing import Literal
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 
 def _env_bool(name: str, default: bool) -> bool:
     """Читает булеву переменную окружения.
@@ -77,7 +81,7 @@ DATASET_NAME = os.getenv("PREVISOR_DATASET_NAME", "cicids2017_processed.csv")  #
 # Реальный сбор трафика (MODE="real")
 # -----------------------------
 
-NETWORK_INTERFACE = os.getenv("PREVISOR_NET_IFACE", "Ethernet 4")
+NETWORK_INTERFACE = os.getenv("PREVISOR_NET_IFACE", "auto")
 PACKET_COUNT_PER_COLLECTION = int(os.getenv("PREVISOR_PACKET_COUNT", "200"))
 PACKET_SNIFF_TIMEOUT_SEC = int(os.getenv("PREVISOR_PACKET_TIMEOUT", "30"))
 BPF_FILTER = os.getenv("PREVISOR_BPF_FILTER", "")  # например: "tcp or udp"
@@ -119,7 +123,13 @@ IFOREST_MODEL_PATH = os.getenv("PREVISOR_IFOREST_MODEL_PATH", os.path.join(MODEL
 # Требование для рабочего сценария: anomaly_detector используется ТОЛЬКО если:
 #   1) ANOMALY_ENABLED=1 (или PREVISOR_ANOMALY_ENABLED=1)
 #   2) baseline-модель IsolationForest существует (см. IFOREST_MODEL_PATH)
-ANOMALY_ENABLED = _env_bool("ANOMALY_ENABLED", False) or _env_bool("PREVISOR_ANOMALY_ENABLED", False)
+ANOMALY_ENABLED = _env_bool("ANOMALY_ENABLED", True) or _env_bool("PREVISOR_ANOMALY_ENABLED", False)
+
+# Логирование сырых строк трафика в БД (traffic_logs).
+LOG_TRAFFIC = _env_bool("PREVISOR_LOG_TRAFFIC", True)
+
+# Включение эвристических детекторов (DDoS/port-scan/HTTP).
+HEURISTICS_ENABLED = _env_bool("PREVISOR_HEURISTICS_ENABLED", True)
 
 # Отчёты (внутреннее)
 LAST_REPORT_PATH = os.getenv("PREVISOR_LAST_REPORT_PATH", os.path.join(MODELS_RUNTIME_DIR, "last_report.txt"))

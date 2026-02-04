@@ -151,7 +151,10 @@ def preprocess_data(
     preferred_keys = ["source_ip", "dest_port", "packet_count", "flow_duration"]
     key_cols = [c for c in preferred_keys if c in df.columns]
     if key_cols:
-        df = df.dropna(subset=key_cols)
+        if purpose == "train":
+            df = df.dropna(subset=key_cols)
+        else:
+            df[key_cols] = df[key_cols].fillna(0)
 
     df = df.drop_duplicates()
 
@@ -161,7 +164,35 @@ def preprocess_data(
     if "source_ip" in df.columns:
         df["source_ip"] = df["source_ip"].astype(str)
 
+    numeric_candidates = [
+        "protocol",
+        "src_port",
+        "dest_port",
+        "packet_len",
+        "ttl",
+        "tcp_flags",
+        "packet_count",
+        "flow_duration",
+    ]
+    for col in numeric_candidates:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+            if purpose != "train":
+                df[col] = df[col].fillna(0)
+
     logger.info("После очистки: %s строк", len(df))
+    if df.empty:
+        logger.warning("После очистки нет данных для обработки (0 строк)")
+        X_empty = df.select_dtypes(include=["number"]).copy()
+        return {
+            "processed_df": df,
+            "X": X_empty,
+            "y": None,
+            "X_train": None,
+            "X_test": None,
+            "y_train": None,
+            "y_test": None,
+        }
 
     # --- 3) Загрузка артефактов (ТОЛЬКО load в inference) ---
     artifacts = PreprocessorArtifacts()

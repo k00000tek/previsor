@@ -80,6 +80,13 @@ class AnomalyDetector:
         random_state: int = 42,
         model_path: str = IFOREST_MODEL_PATH,
     ) -> None:
+        """Инициализирует IsolationForest детектор.
+
+        Args:
+            contamination: Оценка доли аномалий.
+            random_state: Seed.
+            model_path: Путь к модели.
+        """
         self.model_path = model_path
 
         if contamination is None:

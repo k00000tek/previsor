@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+import pandas as pd
 from sqlalchemy import Column, DateTime, Float, Integer, String, create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
@@ -26,7 +27,7 @@ engine = create_engine(
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 Base = declarative_base()
 
-ALERT_STATUSES = {"new", "acknowledged", "false_positive"}
+ALERT_STATUSES = {"new", "acknowledged", "false_positive", "ignored"}
 
 
 # -----------------------------
@@ -141,6 +142,8 @@ def save_alert(alert_type: str, probability: float, source_ip: Optional[str] = N
     Returns:
         ID созданного алерта.
     """
+    if status == "ignored":
+        status = "false_positive"
     if status not in ALERT_STATUSES:
         status = "new"
 
@@ -193,6 +196,8 @@ def update_alert_status(alert_id: int, status: str) -> bool:
     Raises:
         ValueError: Если передан статус вне допустимого набора.
     """
+    if status == "ignored":
+        status = "false_positive"
     if status not in ALERT_STATUSES:
         raise ValueError(f"Некорректный статус '{status}'. Допустимо: {sorted(ALERT_STATUSES)}")
 
@@ -229,8 +234,10 @@ def purge_alerts(
     with session_scope() as session:
         q = session.query(Alert)
 
-        if status:
-            q = q.filter(Alert.status == status)
+    if status:
+        if status == "ignored":
+            status = "false_positive"
+        q = q.filter(Alert.status == status)
 
         if older_than_days is not None:
             border = datetime.utcnow() - timedelta(days=int(older_than_days))
@@ -319,6 +326,7 @@ def save_traffic_logs(df: pd.DataFrame, *, mode: Optional[str] = None) -> int:
     cols = set(df.columns)
 
     def _get(row: Any, name: str) -> Any:
+        """Безопасно получает значение из строки DataFrame."""
         return row[name] if name in cols else None
 
     count = 0

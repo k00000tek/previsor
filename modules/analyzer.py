@@ -79,6 +79,12 @@ class Analyzer:
     """
 
     def __init__(self, model_type: str = "rf", policy: Optional[RiskPolicy] = None) -> None:
+        """Инициализирует Analyzer.
+
+        Args:
+            model_type: Тип модели ("rf" или "xgb").
+            policy: Политика вычисления риска.
+        """
         self.model_type = model_type.lower().strip()
         if self.model_type not in {"rf", "xgb"}:
             raise ValueError("model_type должен быть 'rf' или 'xgb'")

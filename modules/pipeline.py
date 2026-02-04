@@ -8,11 +8,27 @@ from typing import Optional, Dict, Any, List
 import joblib
 import pandas as pd
 
-from config import MODE, FEATURE_SCHEMA_PATH, ANOMALY_ENABLED, IFOREST_MODEL_PATH
+import config as cfg
+from config import (
+    MODE,
+    FEATURE_SCHEMA_PATH,
+    ANOMALY_ENABLED,
+    IFOREST_MODEL_PATH,
+    HEURISTICS_ENABLED,
+    LOG_TRAFFIC,
+)
 from modules.data_collector import collect_traffic
 from modules.preprocessor import preprocess_data
 from modules.analyzer import Analyzer
 from modules.anomaly_detector import detect_anomalies
+from modules.heuristics import detect_heuristic_alerts
+from modules.baseline_manager import (
+    BaselinePolicy,
+    append_baseline,
+    count_baseline_rows,
+    maybe_train_anomaly_model,
+)
+from modules.database import save_traffic_logs
 
 logger = logging.getLogger(__name__)
 if not logging.getLogger().handlers:
@@ -54,15 +70,33 @@ class PreVisorPipeline:
         *,
         enable_classifier: bool = True,
         enable_anomalies: bool = True,
+        enable_heuristics: bool = HEURISTICS_ENABLED,
+        enable_traffic_logs: bool = LOG_TRAFFIC,
         anomaly_strategy: str = "quantile",     # "quantile" | "threshold"
-        anomaly_quantile: float = 0.99,         # top 1% по “аномальности”
+        anomaly_quantile: float = 0.99,         # top 1% по "аномальности"
         anomaly_threshold: Optional[float] = None,  # legacy: decision_function < threshold
         max_anomaly_alerts: int = 50,            # ограничение числа аномалий на прогон
     ) -> None:
+        """Инициализирует пайплайн.
+
+        Args:
+            model_type: Тип модели классификатора.
+            feature_schema_path: Путь к схеме признаков.
+            enable_classifier: Включить классификатор.
+            enable_anomalies: Включить детектор аномалий.
+            enable_heuristics: Включить эвристики.
+            enable_traffic_logs: Логировать трафик в БД.
+            anomaly_strategy: Стратегия выбора аномалий.
+            anomaly_quantile: Квантиль для аномалий.
+            anomaly_threshold: Порог decision_function.
+            max_anomaly_alerts: Максимум аномалий за прогон.
+        """
         self.model_type = str(model_type).strip().lower()
         self.feature_schema_path = feature_schema_path
 
         self.enable_classifier = enable_classifier
+        self.enable_heuristics = enable_heuristics
+        self.enable_traffic_logs = enable_traffic_logs
 
         # Детектор аномалий включаем только при выполнении условий рабочего сценария.
         # Требование:
@@ -148,10 +182,13 @@ class PreVisorPipeline:
         preprocess_params["purpose"] = "inference"
 
         # 1) Получаем сырые данные + предобработка
+        raw_df: Optional[pd.DataFrame] = None
         if input_df is not None:
-            pre = preprocess_data(input_df.copy(), **preprocess_params)
+            raw_df = input_df.copy()
+            pre = preprocess_data(raw_df, **preprocess_params)
         elif input_csv is not None:
-            pre = preprocess_data(input_csv, **preprocess_params)
+            raw_df = pd.read_csv(input_csv)
+            pre = preprocess_data(raw_df, **preprocess_params)
         else:
             raw_df = collect_traffic(mode=mode, save_csv=True, **collect_params)
             pre = preprocess_data(raw_df, **preprocess_params)
@@ -161,8 +198,17 @@ class PreVisorPipeline:
         # 2) Источник IP для алертов
         source_ips = processed_df["source_ip"].tolist() if "source_ip" in processed_df.columns else None
 
+        # 2a) Логирование трафика (сырые строки)
+        if self.enable_traffic_logs and raw_df is not None:
+            try:
+                save_traffic_logs(raw_df, mode=mode)
+            except Exception:
+                logger.exception("Не удалось сохранить traffic_logs")
+
         # 3) Формируем X и выравниваем по schema обучения
         X = self._build_X(pre, processed_df)
+        if X is None or (hasattr(X, "empty") and X.empty):
+            return PipelineResult(processed_df=processed_df, X=X, alerts=[])
         X = self._align_features(X)
 
         alerts: List[Dict[str, Any]] = []
@@ -171,6 +217,34 @@ class PreVisorPipeline:
         if self.enable_classifier:
             class_alerts = self.analyzer.analyze(X, source_ips=source_ips)
             alerts.extend(self._normalize_class_alerts(class_alerts))
+
+        # 4a) Эвристики (DDoS/port-scan/HTTP)
+        if self.enable_heuristics and raw_df is not None:
+            try:
+                heur_alerts = detect_heuristic_alerts(raw_df)
+                alerts.extend(self._normalize_heur_alerts(heur_alerts))
+            except Exception:
+                logger.exception("Ошибка эвристического детектора")
+
+        # 4b) Auto baseline + retrain anomaly model (real mode only)
+        if mode == "real" and raw_df is not None:
+            policy = BaselinePolicy()
+            if policy.auto_enabled:
+                baseline_path = getattr(cfg, "BASELINE_TRAFFIC_CSV", None)
+                if baseline_path:
+                    current_rows = count_baseline_rows(baseline_path)
+                    if current_rows < policy.min_rows:
+                        append_baseline(raw_df, path=baseline_path)
+                        current_rows = count_baseline_rows(baseline_path)
+                        logger.info("Baseline rows: %s / %s", current_rows, policy.min_rows)
+
+                    if current_rows >= policy.min_rows:
+                        trained = maybe_train_anomaly_model(
+                            baseline_csv=baseline_path,
+                            feature_schema_path=self.feature_schema_path,
+                        )
+                        if trained:
+                            self.enable_anomalies = self._should_enable_anomalies(True)
 
         # 5) Аномалии (IsolationForest)
         if self.enable_anomalies:
@@ -278,6 +352,25 @@ class PreVisorPipeline:
                     "timestamp": a.get("timestamp"),
                     "source_ip": a.get("source_ip"),
                     "detection_source": "anomaly_detector",
+                }
+            )
+        return norm
+
+    def _normalize_heur_alerts(self, alerts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Приводит алерты эвристик к единому формату."""
+        norm: List[Dict[str, Any]] = []
+        for a in alerts:
+            norm.append(
+                {
+                    "alert": int(a.get("alert", 0)),
+                    "alert_type": self._get_alert_type(a),
+                    "model_type": "heuristics",
+                    "base_probability": None,
+                    "probability": a.get("probability"),
+                    "timestamp": a.get("timestamp"),
+                    "source_ip": a.get("source_ip"),
+                    "detection_source": a.get("detection_source") or "heuristics",
+                    "details": a.get("details"),
                 }
             )
         return norm

@@ -23,12 +23,15 @@ skinparam cloud {
 package "Core System" {
   [Data Collector\n(modules.data_collector)]
   [Preprocessor\n(modules.preprocessor)]
+  [Heuristics\n(modules.heuristics)]
 
   package "Threat Analysis" {
     [Classifier Analyzer\n(modules.analyzer)]
     [Anomaly Detector\n(modules.anomaly_detector)]
     [API Integration\n(utils.api_integration)]
   }
+
+  [Baseline Manager\n(modules.baseline_manager)]
 }
 
 package "Presentation Layer" {
@@ -36,39 +39,44 @@ package "Presentation Layer" {
 }
 
 database "Data Storage" {
-  [SQLite DB\n(db/previsor.db)]
+  [SQLite DB\n(db/runtime/previsor.db)]
 }
 
-package "Background Tasks" {
+package "Background Tasks (optional)" {
+  [Auto Monitor Thread\n(app.py)]
   [Celery Worker\n(celery_app.py)]
 }
 
 cloud "External Services (Optional)" {
-  [Threat Intelligence API\n(AbuseIPDB, VirusTotal)]
-  [Notification Channels\n(SMTP, Slack, etc.)]
+  [Threat Intelligence API\n(AbuseIPDB)]
+  [Telegram Bot\n(notifications)]
 }
 
 ' === Связи ===
 [Data Collector\n(modules.data_collector)] --> [Preprocessor\n(modules.preprocessor)] : raw traffic
 [Preprocessor\n(modules.preprocessor)] --> [Classifier Analyzer\n(modules.analyzer)] : feature matrix
 [Preprocessor\n(modules.preprocessor)] --> [Anomaly Detector\n(modules.anomaly_detector)] : feature matrix
+[Preprocessor\n(modules.preprocessor)] --> [Heuristics\n(modules.heuristics)] : raw rows
 
-[Classifier Analyzer\n(modules.analyzer)] --> [SQLite DB\n(db/previsor.db)] : alerts
-[Anomaly Detector\n(modules.anomaly_detector)] --> [SQLite DB\n(db/previsor.db)] : anomaly alerts
-[API Integration\n(utils.api_integration)] --> [SQLite DB\n(db/previsor.db)] : ip_cache
+[Classifier Analyzer\n(modules.analyzer)] --> [SQLite DB\n(db/runtime/previsor.db)] : alerts
+[Anomaly Detector\n(modules.anomaly_detector)] --> [SQLite DB\n(db/runtime/previsor.db)] : anomaly alerts
+[API Integration\n(utils.api_integration)] --> [SQLite DB\n(db/runtime/previsor.db)] : ip_cache
+[Baseline Manager\n(modules.baseline_manager)] --> [SQLite DB\n(db/runtime/previsor.db)] : baseline stats
 
-[Flask Web App\n(app.py, templates/dashboard.html)] --> [SQLite DB\n(db/previsor.db)] : read alerts/logs
+[Flask Web App\n(app.py, templates/dashboard.html)] --> [SQLite DB\n(db/runtime/previsor.db)] : read alerts/logs
 [Flask Web App\n(app.py, templates/dashboard.html)] --> [Classifier Analyzer\n(modules.analyzer)] : manual analysis request
 
 [Classifier Analyzer\n(modules.analyzer)] --> [API Integration\n(utils.api_integration)] : check IP reputation
-[API Integration\n(utils.api_integration)] --> [Threat Intelligence API\n(AbuseIPDB, VirusTotal)] : HTTP requests
+[API Integration\n(utils.api_integration)] --> [Threat Intelligence API\n(AbuseIPDB)] : HTTP requests
+
+[Classifier Analyzer\n(modules.analyzer)] --> [Telegram Bot\n(notifications)] : alerts / notify
+
+[Auto Monitor Thread\n(app.py)] --> [Data Collector\n(modules.data_collector)] : periodic collect
+[Auto Monitor Thread\n(app.py)] --> [Preprocessor\n(modules.preprocessor)] : periodic preprocess
+[Auto Monitor Thread\n(app.py)] --> [Classifier Analyzer\n(modules.analyzer)] : periodic analysis
 
 [Celery Worker\n(celery_app.py)] --> [Data Collector\n(modules.data_collector)] : scheduled collect
 [Celery Worker\n(celery_app.py)] --> [Preprocessor\n(modules.preprocessor)] : scheduled preprocess
 [Celery Worker\n(celery_app.py)] --> [Classifier Analyzer\n(modules.analyzer)] : scheduled analysis
-
-[Classifier Analyzer\n(modules.analyzer)] --> [Notification Channels\n(SMTP, Slack, etc.)] : alerts / notify
-
-[Flask Web App\n(app.py, templates/dashboard.html)] --> [Notification Channels\n(SMTP, Slack, etc.)] : optional user actions
 
 @enduml

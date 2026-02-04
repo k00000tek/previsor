@@ -144,5 +144,5 @@ def enrich_alert_with_reputation(alert_type: str, probability: float, source_ip:
         return float(probability)
 
     adjusted = min(float(probability) + float(score) / 200.0, 1.0)
-    logger.info("IP %s репутация %.1f%% → вероятность %.2f → %.2f", source_ip, score, probability, adjusted)
+    logger.info("IP %s репутация %.1f%% -> вероятность %.2f -> %.2f", source_ip, score, probability, adjusted)
     return float(adjusted)

@@ -39,3 +39,6 @@ data/runtime/
 # Big / temporary datasets
 utils/tmp_kaggle/
 data/**/*.zip
+
+/results
+/docx

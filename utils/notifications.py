@@ -98,6 +98,11 @@ class TelegramConfig:
 
 
 def _telegram_config() -> TelegramConfig:
+    """Собирает конфигурацию Telegram из окружения.
+
+    Returns:
+        TelegramConfig.
+    """
     token = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
     chat_ids = _split_csv(os.getenv("TELEGRAM_CHAT_ID") or "")
     enabled = _env_bool("PREVISOR_TELEGRAM_ENABLED", True)
@@ -113,6 +118,14 @@ def _telegram_config() -> TelegramConfig:
 
 
 def _telegram_ready(cfg: TelegramConfig) -> bool:
+    """Проверяет, готова ли конфигурация Telegram для отправки.
+
+    Args:
+        cfg: Конфигурация Telegram.
+
+    Returns:
+        True, если можно отправлять сообщения.
+    """
     return bool(cfg.enabled and cfg.token and cfg.chat_ids)
 
 

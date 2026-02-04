@@ -1,40 +1,44 @@
 @startuml
-title Диаграмма последовательности PreVisor:\nАвтоматический мониторинг и ручной анализ
+title Диаграмма последовательности PreVisor
 
 actor "Пользователь" as User
 participant "Flask UI\n(Веб-интерфейс)" as Flask
+participant "Авто-монитор\n(app.py)" as Mon
 participant "Сборщик данных\n(DataCollector)" as DC
 participant "Предобработка\n(Preprocessor)" as PP
-participant "Анализатор\n(Analyzer + AnomalyDetector)" as AN
+participant "Анализатор\n(Analyzer + Heuristics + AnomalyDetector)" as AN
 participant "База данных\n(DB)" as DB
 participant "Threat Intelligence\n(API)" as EXT
+participant "Telegram" as TG
 
-loop Каждые 10 минут (Celery beat)
-  DC -> DC : collect_traffic()\nСбор трафика
-  DC -> PP : preprocess_data(raw_logs)\nПредобработка
-  PP -> AN : analyze(features)\nML-классификация
-  AN -> AN : detect_anomalies(features)\nIsolationForest
-  AN -> EXT : check_ip(ip)\nПроверка репутации (AbuseIPDB)
-  AN -> AN : combine_signals()\nрасчёт интегрального риска
+loop Каждые N секунд (PREVISOR_AUTO_MONITOR_INTERVAL)
+  Mon -> DC : collect_traffic()
+  DC -> PP : preprocess_data(raw_logs)
+  PP -> AN : analyze(features)
+  AN -> EXT : check_ip(ip) (опционально)
+  AN -> AN : combine_signals()
 
   alt Риск выше порога
-    AN -> DB : insertAlert(alert_json)\nСохранить алерт (alerts)
+    AN -> DB : insertAlert(alert)
+    AN -> TG : send_alert()
   else Нет угроз
-    AN -> DB : insertLog(clean_results)\nСохранить журнал (traffic_logs)
+    AN -> DB : insertLog(traffic_logs)
   end
 end
 
-User -> Flask : requestDashboard()\nОткрыть дашборд
-Flask -> DB : getAlerts(filters)\nЗапрос алертов
-DB --> Flask : list_alerts\nРезультаты
-Flask --> User : renderDashboard(alerts)\nОтображение данных
+User -> Flask : openDashboard()
+Flask -> DB : getAlerts(filters)
+DB --> Flask : list_alerts
+Flask --> User : renderDashboard(alerts)
 
 opt Ручной запуск анализа
-  User -> Flask : triggerAnalysis(upload/file)\nЗапустить анализ вручную
-  Flask -> PP : preprocess_data(file)\nПредобработка файла
-  PP -> AN : analyze(features)\nML-анализ + аномалист
-  AN -> DB : insertAlert(alert)\nСохранить результат
-  Flask --> User : showNewAlert()\nПоказать новый алерт
+  User -> Flask : triggerAnalysis()
+  Flask -> DC : collect_traffic() (или файл)
+  DC -> PP : preprocess_data()
+  PP -> AN : analyze(features)
+  AN -> DB : insertAlert(alert)
+  AN -> TG : send_alert()
+  Flask --> User : showNewAlert()
 end
 
 @enduml

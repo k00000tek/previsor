@@ -1,7 +1,6 @@
 @startuml
 title ER-диаграмма БД PreVisor
 
-' Стиль (по желанию)
 hide circle
 hide methods
 hide stereotypes
@@ -11,8 +10,6 @@ skinparam entity {
   BorderColor #555555
   FontColor #111111
 }
-
-' === Сущности ===
 
 entity "ip_cache" as IPCache {
   * ip : VARCHAR <<PK>>
@@ -25,39 +22,32 @@ entity "ip_cache" as IPCache {
 entity "alerts" as Alerts {
   * id : INTEGER <<PK>>
   --
-  timestamp       : DATETIME
-  source_ip       : VARCHAR
-  dest_port       : INTEGER
-  alert_type      : VARCHAR
-  model_type      : VARCHAR
-  probability     : FLOAT
-  severity        : VARCHAR
-  status          : VARCHAR
-  detection_source: VARCHAR
-  ip_cache_ip     : VARCHAR <<FK>>
+  timestamp  : DATETIME
+  alert_type : VARCHAR
+  probability: FLOAT
+  source_ip  : VARCHAR
+  status     : VARCHAR
 }
 
 entity "traffic_logs" as TrafficLogs {
   * id : INTEGER <<PK>>
   --
-  timestamp    : DATETIME
-  source_ip    : VARCHAR
-  dest_ip      : VARCHAR
-  dest_port    : INTEGER
-  protocol     : VARCHAR
-  packet_count : INTEGER
-  flow_duration: BIGINT
-  is_alert     : BOOLEAN
-  alert_id     : INTEGER <<FK>>
+  timestamp  : DATETIME
+  source_ip  : VARCHAR
+  dest_ip    : VARCHAR
+  protocol   : INTEGER
+  src_port   : INTEGER
+  dest_port  : INTEGER
+  packet_len : INTEGER
+  ttl        : INTEGER
+  tcp_flags  : INTEGER
+  http_method: VARCHAR
+  mode       : VARCHAR
 }
 
-' === Связи ===
-IPCache ||--o{ Alerts : "1 : N\n(ip → alerts)"
-TrafficLogs ||--o{ Alerts : "0..1 : N\n(log → alerts)"
-
-' Пояснение:
-' - ip_cache.ip      ↔ alerts.ip_cache_ip
-' - alerts.id        ↔ traffic_logs.alert_id (если запись лога породила алерт)
-' - source_ip в alerts и traffic_logs дублируется для удобства фильтрации
+note right of Alerts
+Связи с ip_cache и traffic_logs
+логические (FK не используются).
+end note
 
 @enduml

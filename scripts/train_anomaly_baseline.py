@@ -7,6 +7,13 @@ from typing import List
 
 import joblib
 import pandas as pd
+from pathlib import Path
+import sys
+# --- Bootstrap imports: чтобы работало при запуске `python scripts/...` на Windows ---
+PROJECT_ROOT = Path(__file__).resolve().parents[1]  # .../previsor
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+# -------------------------------------------------------------------------------
 
 import config as cfg
 from modules.anomaly_detector import AnomalyDetector
@@ -49,6 +56,11 @@ def _align_features(X: pd.DataFrame, feature_schema_path: str) -> pd.DataFrame:
 
 
 def _parse_args() -> argparse.Namespace:
+    """Парсит аргументы CLI для обучения baseline.
+
+    Returns:
+        argparse.Namespace.
+    """
     parser = argparse.ArgumentParser(description="Train IsolationForest baseline for PreVisor")
     parser.add_argument(
         "--input",
@@ -59,6 +71,11 @@ def _parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    """Обучает IsolationForest на baseline CSV.
+
+    Returns:
+        Код завершения.
+    """
     args = _parse_args()
     input_path = str(args.input)
 

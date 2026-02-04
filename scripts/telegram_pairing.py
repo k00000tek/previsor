@@ -21,6 +21,11 @@ from utils.notifications import extract_chat_candidates, fetch_telegram_updates
 
 
 def _parse_args() -> argparse.Namespace:
+    """Парсит аргументы CLI.
+
+    Returns:
+        argparse.Namespace.
+    """
     p = argparse.ArgumentParser(description="PreVisor Telegram pairing helper")
     p.add_argument("--env-file", default=".env", help="Путь к .env (если нужно записать TELEGRAM_CHAT_ID)")
     p.add_argument("--write", action="store_true", help="Записать TELEGRAM_CHAT_ID в env-file")
@@ -30,6 +35,13 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _write_env_value(env_path: str, key: str, value: str) -> None:
+    """Записывает ключ/значение в .env.
+
+    Args:
+        env_path: Путь к .env.
+        key: Имя переменной.
+        value: Значение.
+    """
     lines = []
     if os.path.exists(env_path):
         with open(env_path, "r", encoding="utf-8") as f:
@@ -55,6 +67,11 @@ def _write_env_value(env_path: str, key: str, value: str) -> None:
 
 
 def main() -> int:
+    """Выполняет pairing для Telegram и выводит chat_id.
+
+    Returns:
+        Код завершения.
+    """
     args = _parse_args()
 
     updates = fetch_telegram_updates(limit=args.limit)
