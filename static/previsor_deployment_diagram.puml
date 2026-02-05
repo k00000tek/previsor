@@ -15,13 +15,9 @@ skinparam artifact {
 node "ПК пользователя\n(Windows)" as Client {
     artifact "Браузер\n(Browser)" as Browser
     artifact "Flask-приложение\n(app.py)" as FlaskApp
+    artifact "Непрерывный монитор\n(collector + processor)" as Monitor
     artifact "Модули анализа\n(modules/*)" as AnalyzerMods
     artifact "SQLite DB\n(db/runtime/previsor.db)" as DB
-}
-
-node "Опционально" as Optional {
-    artifact "Celery worker\n(celery_app.py)" as CeleryApp
-    artifact "Redis broker" as Redis
 }
 
 cloud "Внешние сервисы" as Cloud {
@@ -30,13 +26,12 @@ cloud "Внешние сервисы" as Cloud {
 }
 
 Browser --> FlaskApp : HTTP
+FlaskApp --> Monitor : start/stop/status
 FlaskApp --> AnalyzerMods : анализ/предобработка
+Monitor --> AnalyzerMods : batch analysis
 FlaskApp --> DB : SQL
 AnalyzerMods --> DB : alerts/logs
 AnalyzerMods --> TI : репутация IP (опционально)
 AnalyzerMods --> Notif : уведомления
-
-CeleryApp --> Redis : broker
-CeleryApp --> AnalyzerMods : плановые задачи
 
 @enduml

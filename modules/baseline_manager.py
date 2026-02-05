@@ -10,7 +10,12 @@ import joblib
 import pandas as pd
 
 import config as cfg
-from modules.anomaly_detector import AnomalyDetector
+from modules.anomaly_detector import (
+    AnomalyDetector,
+    AnomalyPolicy,
+    compute_anomaly_stats,
+    save_anomaly_stats,
+)
 from modules.preprocessor import preprocess_data
 
 logger = logging.getLogger(__name__)
@@ -81,11 +86,16 @@ def _align_features(X: pd.DataFrame, feature_schema_path: str) -> pd.DataFrame:
     Returns:
         Матрица признаков в согласованном порядке.
     """
-    if not feature_schema_path or not os.path.exists(feature_schema_path):
-        logger.warning("feature schema не найдена (%s) - обучение baseline будет без align", feature_schema_path)
-        return X
+    schema_path = feature_schema_path
+    if not schema_path or not os.path.exists(schema_path):
+        fallback = getattr(cfg, "FEATURE_SCHEMA_PRETRAINED_PATH", None)
+        if fallback and os.path.exists(fallback):
+            schema_path = fallback
+        else:
+            logger.warning("feature schema не найдена (%s) - обучение baseline будет без align", feature_schema_path)
+            return X
 
-    feature_cols = joblib.load(feature_schema_path)
+    feature_cols = joblib.load(schema_path)
     if not isinstance(feature_cols, (list, tuple)) or not all(isinstance(c, str) for c in feature_cols):
         logger.warning("Некорректный формат feature schema (%s) - пропускаю align", type(feature_cols))
         return X
@@ -178,5 +188,10 @@ def maybe_train_anomaly_model(*, baseline_csv: str, feature_schema_path: str) ->
     X = _align_features(X, feature_schema_path)
     det = AnomalyDetector(model_path=model_path)
     det.fit(X)
+    stats_path = getattr(cfg, "IFOREST_STATS_PATH", None)
+    if stats_path:
+        policy_stats = AnomalyPolicy()
+        stats = compute_anomaly_stats(X, model=det.model, quantiles=policy_stats.baseline_quantiles)
+        save_anomaly_stats(stats, stats_path)
     logger.info("IsolationForest auto-trained on baseline: %s", model_path)
     return True

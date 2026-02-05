@@ -4,6 +4,7 @@ import html
 import logging
 import os
 import textwrap
+import time
 from dataclasses import dataclass
 from email.mime.text import MIMEText
 from typing import Iterable, List, Optional, Tuple
@@ -159,31 +160,58 @@ def send_telegram(message: str) -> bool:
 
     parts = list(_chunks(message, limit=4096))
     delivered_any = False
+    max_retries = max(1, int(os.getenv("PREVISOR_TELEGRAM_MAX_RETRIES", "3")))
+    backoff_base = float(os.getenv("PREVISOR_TELEGRAM_RETRY_BASE_SEC", "1.0"))
 
     for chat_id in cfg.chat_ids:
         for part in parts:
             payload = {"chat_id": chat_id, "text": part, "parse_mode": "HTML"}
-            try:
-                resp = requests.post(url, data=payload, timeout=cfg.timeout_sec)
-                ok = (resp.status_code == 200) and (resp.json().get("ok") is True)
-                if ok:
-                    delivered_any = True
-                    continue
+            for attempt in range(1, max_retries + 1):
+                try:
+                    resp = requests.post(url, data=payload, timeout=cfg.timeout_sec)
+                    ok = (resp.status_code == 200) and (resp.json().get("ok") is True)
+                    if ok:
+                        delivered_any = True
+                        break
 
-                if resp.status_code == 400 and "chat not found" in resp.text.lower():
-                    logger.error(
-                        "Telegram error 400: chat not found. "
-                        "Проверь: (1) пользователь написал боту /start, "
-                        "(2) TELEGRAM_CHAT_ID верный, "
-                        "(3) бот добавлен в группу/канал и имеет права. "
-                        "chat_id=%s",
-                        chat_id,
-                    )
-                else:
+                    if resp.status_code == 429:
+                        retry_after = None
+                        try:
+                            retry_after = resp.json().get("parameters", {}).get("retry_after")
+                        except Exception:
+                            retry_after = None
+                        sleep_s = float(retry_after or (backoff_base * (2 ** (attempt - 1))))
+                        logger.warning("Telegram rate limited (429), retry in %.1fs", sleep_s)
+                        time.sleep(sleep_s)
+                        continue
+
+                    if resp.status_code in {500, 502, 503, 504} and attempt < max_retries:
+                        sleep_s = backoff_base * (2 ** (attempt - 1))
+                        logger.warning("Telegram temporary error %s, retry in %.1fs", resp.status_code, sleep_s)
+                        time.sleep(sleep_s)
+                        continue
+
+                    if resp.status_code == 400 and "chat not found" in resp.text.lower():
+                        logger.error(
+                            "Telegram error 400: chat not found. "
+                            "Проверь: (1) пользователь написал боту /start, "
+                            "(2) TELEGRAM_CHAT_ID верный, "
+                            "(3) бот добавлен в группу/канал и имеет права. "
+                            "chat_id=%s",
+                            chat_id,
+                        )
+                        break
+
                     logger.error("Telegram error %s: %s", resp.status_code, resp.text)
-            except Exception as exc:
-                logger.error("Telegram exception: %s", exc)
-
+                    break
+                except Exception as exc:
+                    if attempt < max_retries:
+                        sleep_s = backoff_base * (2 ** (attempt - 1))
+                        logger.warning("Telegram exception: %s (retry in %.1fs)", exc, sleep_s)
+                        time.sleep(sleep_s)
+                        continue
+                    logger.error("Telegram exception: %s", exc)
+                    break
     return delivered_any
 
 

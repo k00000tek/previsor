@@ -15,13 +15,17 @@
 </head>
 <body>
   <div class="container">
-    <div class="d-flex justify-content-between align-items-end mb-3">
+    <div class="d-flex justify-content-between align-items-end mb-3 flex-wrap gap-2">
       <div>
         <h1 class="mb-0">PreVisor — мониторинг угроз</h1>
-        <div class="small-muted">Последнее обновление: <span id="lastRefresh" class="mono">—</span></div>
+        <div class="small-muted">
+          Мониторинг: <span id="monitorState" class="badge bg-secondary">-</span> <span class="mx-2">&bull;</span> Очередь: <span id="monitorQueue" class="mono">-</span> <span class="mx-2">&bull;</span> Батч: <span id="monitorBatch" class="mono">-</span> <span class="mx-2">&bull;</span> Последнее обновление: <span id="lastRefresh" class="mono">-</span>
+        </div>
       </div>
-      <div>
-        <button class="btn btn-outline-secondary" onclick="loadAlerts()">Обновить сейчас</button>
+      <div class="btn-group">
+        <button class="btn btn-success" onclick="startMonitor()">Старт мониторинга</button>
+        <button class="btn btn-outline-danger" onclick="stopMonitor()">Стоп</button>
+        <button class="btn btn-outline-secondary" onclick="loadAlerts()">Обновить дашборд</button>
       </div>
     </div>
 
@@ -51,10 +55,10 @@
           </select>
         </div>
         <div class="col-md-2">
-          <button class="btn btn-primary w-100" onclick="runAnalysis()">Запустить анализ</button>
+          <button class="btn btn-primary w-100" onclick="runAnalysis()">Разовый анализ</button>
         </div>
         <div class="col-md-2">
-          <button class="btn btn-outline-primary w-100" onclick="collectBaseline()">Собрать базовую выборку</button>
+          <button class="btn btn-outline-primary w-100" onclick="collectBaseline()">Накопить baseline</button>
         </div>
 
         <div class="col-12 small-muted">
@@ -77,7 +81,7 @@
       <!-- График по времени -->
       <div class="col-md-6">
         <div class="card">
-          <div class="card-header">Алерты по часам</div>
+          <div class="card-header">Динамика алертов (24ч)</div>
           <div class="card-body">
             <div id="timeChart" style="height: 320px;"></div>
           </div>
@@ -181,7 +185,7 @@
       const q = new URLSearchParams();
       if (type) q.set('type', type);
       if (status) q.set('status', status);
-      q.set('limit', '100');
+      q.set('limit', '500');
 
       const res = await fetch(`/alerts?${q.toString()}`);
       const alerts = await res.json();
@@ -213,6 +217,7 @@
 
       updateCharts(filtered);
       updateFilterOptions(alerts);
+      await refreshMonitorStatus();
 
       document.getElementById('lastRefresh').textContent = new Date().toLocaleString();
     }
@@ -224,40 +229,59 @@
         byType[t] = (byType[t] || 0) + 1;
       });
 
+      const typeEntries = Object.entries(byType).sort((a, b) => b[1] - a[1]);
+      const typeLabels = typeEntries.map(entry => entry[0]);
+      const typeCounts = typeEntries.map(entry => entry[1]);
+
       Plotly.newPlot('typeChart', [{
-        x: Object.keys(byType),
-        y: Object.values(byType),
-        type: 'bar'
+        x: typeLabels,
+        y: typeCounts,
+        type: 'bar',
+        marker: { color: '#2f6fed' },
+        hovertemplate: '%{x}<br>Alerts: %{y}<extra></extra>'
       }], {
         title: 'Количество алертов по типам',
         margin: { t: 40, l: 40, r: 10, b: 60 }
       });
 
-      const byHour = {};
+      const now = new Date();
+      const windowHours = 24;
+      const binMinutes = 30;
+      const start = new Date(now.getTime() - windowHours * 60 * 60 * 1000);
+      const binMs = binMinutes * 60 * 1000;
+      const binCount = Math.floor((now - start) / binMs) + 1;
+      const bins = [];
+      const counts = new Array(binCount).fill(0);
+
+      for (let i = 0; i < binCount; i += 1) {
+        bins.push(new Date(start.getTime() + i * binMs));
+      }
+
       alerts.forEach(a => {
         const d = new Date(a.timestamp);
         if (isNaN(d.getTime())) return;
-        const h = d.getHours();
-        byHour[h] = (byHour[h] || 0) + 1;
+        if (d < start || d > now) return;
+        const idx = Math.floor((d - start) / binMs);
+        if (idx >= 0 && idx < counts.length) counts[idx] += 1;
       });
 
-      const hours = Object.keys(byHour)
-        .map(h => Number(h))
-        .sort((a, b) => a - b)
-        .map(h => h.toString());
-
       Plotly.newPlot('timeChart', [{
-        x: hours,
-        y: hours.map(h => byHour[h]),
-        type: 'bar'
+        x: bins,
+        y: counts,
+        type: 'scatter',
+        mode: 'lines+markers',
+        line: { color: '#d85c38', width: 3 },
+        fill: 'tozeroy',
+        fillcolor: 'rgba(216, 92, 56, 0.2)',
+        marker: { size: 6 },
+        hovertemplate: '%{x|%H:%M}<br>Alerts: %{y}<extra></extra>'
       }], {
-        title: 'Алерты по часам',
-        xaxis: { title: 'Часы' },
-        yaxis: { title: 'Количество' },
+        title: 'Динамика алертов (24ч)',
+        xaxis: { title: 'Время', type: 'date', tickformat: '%H:%M' },
+        yaxis: { title: 'Количество', rangemode: 'tozero' },
         margin: { t: 40, l: 40, r: 10, b: 60 }
       });
     }
-
     function updateFilterOptions(alerts) {
       const types = [...new Set(alerts.map(a => a.type))].filter(Boolean).sort();
       const select = document.getElementById('filterType');
@@ -268,6 +292,54 @@
       if (types.includes(current)) select.value = current;
     }
 
+
+
+    async function refreshMonitorStatus() {
+      try {
+        const res = await fetch('/monitor/status');
+        if (!res.ok) return;
+        const data = await res.json();
+
+        const badge = document.getElementById('monitorState');
+        const queue = document.getElementById('monitorQueue');
+        const batch = document.getElementById('monitorBatch');
+
+        if (badge) {
+          badge.textContent = data.running ? 'ON' : 'OFF';
+          badge.className = `badge ${data.running ? 'bg-success' : 'bg-secondary'}`;
+        }
+        if (queue) {
+          queue.textContent = data.queue_size ?? '-';
+        }
+        if (batch) {
+          const batchSize = (data.batch_size !== undefined && data.batch_size !== null) ? data.batch_size : '-';
+          const flushSec = (data.flush_sec !== undefined && data.flush_sec !== null) ? data.flush_sec : '-';
+          batch.textContent = batchSize + ' / ' + flushSec + 's';
+        }
+      } catch (err) {
+        // ignore
+      }
+    }
+
+    async function startMonitor() {
+      const res = await fetch('/monitor/start', { method: 'POST' });
+      if (!res.ok) {
+        const t = await res.text();
+        alert(`Monitor start failed: ${t}`);
+        return;
+      }
+      await refreshMonitorStatus();
+    }
+
+    async function stopMonitor() {
+      const res = await fetch('/monitor/stop', { method: 'POST' });
+      if (!res.ok) {
+        const t = await res.text();
+        alert(`Monitor stop failed: ${t}`);
+        return;
+      }
+      await refreshMonitorStatus();
+    }
     async function runAnalysis() {
       const file = document.getElementById('fileInput').files[0];
       const mode = document.getElementById('runMode').value;

@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import ipaddress
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -119,8 +120,19 @@ class HeuristicPolicy:
         if self.suspicious_ports is None:
             self.suspicious_ports = _env_csv_ints(
                 "PREVISOR_SUSPICIOUS_PORTS",
-                default=[21, 22, 23, 25, 53, 80, 443, 445, 3389, 1433, 3306, 5432, 6379, 27017, 5900],
+                default=[21, 22, 23, 25, 445, 3389, 1433, 3306, 5432, 6379, 27017, 5900],
             )
+
+
+def _is_private_ip(value: Optional[str]) -> bool:
+    """Проверяет, что IP относится к private/loopback/link-local сети."""
+    if not value:
+        return False
+    try:
+        ip = ipaddress.ip_address(str(value))
+    except ValueError:
+        return False
+    return bool(ip.is_private or ip.is_loopback or ip.is_link_local)
 
 
 def _col(df: pd.DataFrame, *names: str) -> Optional[str]:
@@ -161,7 +173,12 @@ def _safe_iter_text(row: pd.Series, cols: Iterable[str]) -> str:
     return " ".join(parts)
 
 
-def detect_heuristic_alerts(df: pd.DataFrame) -> List[Dict[str, Any]]:
+def detect_heuristic_alerts(
+    df: pd.DataFrame,
+    *,
+    require_private_target: bool = False,
+    require_private_source: bool = False,
+) -> List[Dict[str, Any]]:
     """Heuristic detections for DDoS/port scanning/suspicious ports/HTTP anomalies.
 
     This works on raw traffic rows (pre-preprocessing), so it is resilient to dataset variety.
@@ -179,6 +196,24 @@ def detect_heuristic_alerts(df: pd.DataFrame) -> List[Dict[str, Any]]:
     source_col = _col(df, "source_ip", "src_ip", "Source IP")
     dest_ip_col = _col(df, "dest_ip", "dst_ip", "Destination IP")
     dest_port_col = _col(df, "dest_port", "dst_port", "Destination Port")
+
+    if require_private_target:
+        if not dest_ip_col:
+            logger.debug("Heuristics skipped: dest_ip missing for private-target mode")
+            return []
+        mask = df[dest_ip_col].astype(str).map(_is_private_ip)
+        df = df[mask]
+        if df.empty:
+            return []
+
+    if require_private_source:
+        if not source_col:
+            logger.debug("Heuristics skipped: source_ip missing for private-source mode")
+            return []
+        mask = df[source_col].astype(str).map(_is_private_ip)
+        df = df[mask]
+        if df.empty:
+            return []
 
     # Port scanning: many unique dest ports from one source in a batch.
     if source_col and dest_port_col:
@@ -257,11 +292,11 @@ def detect_heuristic_alerts(df: pd.DataFrame) -> List[Dict[str, Any]]:
                                 "alert_type": "Suspicious Port",
                                 "probability": min(1.0, float(count) / max(policy.suspicious_port_min_hits, 1)),
                                 "source_ip": None,
-                            "details": {"dest_port": int(port), "hits": int(count)},
-                            "timestamp": now,
-                            "detection_source": "heuristics",
-                        }
-                    )
+                                "details": {"dest_port": int(port), "hits": int(count)},
+                                "timestamp": now,
+                                "detection_source": "heuristics",
+                            }
+                        )
 
     # HTTP anomalies: regex scan on URL/content-like fields.
     http_cols = [
@@ -281,10 +316,10 @@ def detect_heuristic_alerts(df: pd.DataFrame) -> List[Dict[str, Any]]:
                         "alert_type": "HTTP Anomaly",
                         "probability": 0.9,
                         "source_ip": str(row.get(source_col)) if source_col else None,
-                    "details": {"columns": http_cols},
-                    "timestamp": now,
-                    "detection_source": "heuristics",
-                }
-            )
+                        "details": {"columns": http_cols},
+                        "timestamp": now,
+                        "detection_source": "heuristics",
+                    }
+                )
 
     return alerts

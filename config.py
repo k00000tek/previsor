@@ -51,12 +51,23 @@ DATASETS_DIR = os.getenv("PREVISOR_DATASETS_DIR", os.path.join(DATA_RUNTIME_DIR,
 
 MODELS_ROOT_DIR = os.getenv("PREVISOR_MODELS_ROOT_DIR", os.path.join(BASE_DIR, "models"))
 MODELS_RUNTIME_DIR = os.getenv("PREVISOR_MODELS_RUNTIME_DIR", os.path.join(MODELS_ROOT_DIR, "runtime"))
+MODELS_PRETRAINED_DIR = os.getenv("PREVISOR_MODELS_PRETRAINED_DIR", os.path.join(MODELS_ROOT_DIR, "pretrained"))
 
 DB_ROOT_DIR = os.getenv("PREVISOR_DB_ROOT_DIR", os.path.join(BASE_DIR, "db"))
 DB_RUNTIME_DIR = os.getenv("PREVISOR_DB_RUNTIME_DIR", os.path.join(DB_ROOT_DIR, "runtime"))
 DB_PATH = os.getenv("PREVISOR_DB_PATH", os.path.join(DB_RUNTIME_DIR, "previsor.db"))
 
-for _p in (DATA_ROOT_DIR, SAMPLES_DIR, DATA_RUNTIME_DIR, DATASETS_DIR, MODELS_ROOT_DIR, MODELS_RUNTIME_DIR, DB_ROOT_DIR, DB_RUNTIME_DIR):
+for _p in (
+    DATA_ROOT_DIR,
+    SAMPLES_DIR,
+    DATA_RUNTIME_DIR,
+    DATASETS_DIR,
+    MODELS_ROOT_DIR,
+    MODELS_RUNTIME_DIR,
+    MODELS_PRETRAINED_DIR,
+    DB_ROOT_DIR,
+    DB_RUNTIME_DIR,
+):
     os.makedirs(_p, exist_ok=True)
 
 # -----------------------------
@@ -118,6 +129,44 @@ LABEL_ENCODER_PATH = os.getenv("PREVISOR_LABEL_ENCODER_PATH", os.path.join(MODEL
 
 # Аномалии
 IFOREST_MODEL_PATH = os.getenv("PREVISOR_IFOREST_MODEL_PATH", os.path.join(MODELS_RUNTIME_DIR, "isolation_forest.pkl"))
+IFOREST_STATS_PATH = os.getenv(
+    "PREVISOR_IFOREST_STATS_PATH",
+    os.path.join(MODELS_RUNTIME_DIR, "isolation_forest_stats.json"),
+)
+
+# Предобученные артефакты (fallback, если runtime отсутствует)
+RF_PRETRAINED_MODEL_PATH = os.getenv(
+    "PREVISOR_RF_PRETRAINED_MODEL_PATH",
+    os.path.join(MODELS_PRETRAINED_DIR, "previsor_model.pkl"),
+)
+XGB_PRETRAINED_MODEL_PATH = os.getenv(
+    "PREVISOR_XGB_PRETRAINED_MODEL_PATH",
+    os.path.join(MODELS_PRETRAINED_DIR, "previsor_model_xgb.pkl"),
+)
+FEATURE_SCHEMA_PRETRAINED_PATH = os.getenv(
+    "PREVISOR_FEATURE_SCHEMA_PRETRAINED_PATH",
+    os.path.join(MODELS_PRETRAINED_DIR, "feature_columns.pkl"),
+)
+SCALER_PRETRAINED_PATH = os.getenv(
+    "PREVISOR_SCALER_PRETRAINED_PATH",
+    os.path.join(MODELS_PRETRAINED_DIR, "scaler.pkl"),
+)
+SCALER_COLUMNS_PRETRAINED_PATH = os.getenv(
+    "PREVISOR_SCALER_COLUMNS_PRETRAINED_PATH",
+    os.path.join(MODELS_PRETRAINED_DIR, "scaler_columns.pkl"),
+)
+LABEL_ENCODER_PRETRAINED_PATH = os.getenv(
+    "PREVISOR_LABEL_ENCODER_PRETRAINED_PATH",
+    os.path.join(MODELS_PRETRAINED_DIR, "label_encoder.pkl"),
+)
+IFOREST_PRETRAINED_PATH = os.getenv(
+    "PREVISOR_IFOREST_PRETRAINED_PATH",
+    os.path.join(MODELS_PRETRAINED_DIR, "isolation_forest.pkl"),
+)
+IFOREST_STATS_PRETRAINED_PATH = os.getenv(
+    "PREVISOR_IFOREST_STATS_PRETRAINED_PATH",
+    os.path.join(MODELS_PRETRAINED_DIR, "isolation_forest_stats.json"),
+)
 
 # Включение детектора аномалий.
 # Требование для рабочего сценария: anomaly_detector используется ТОЛЬКО если:
@@ -135,6 +184,15 @@ HEURISTICS_ENABLED = _env_bool("PREVISOR_HEURISTICS_ENABLED", True)
 LAST_REPORT_PATH = os.getenv("PREVISOR_LAST_REPORT_PATH", os.path.join(MODELS_RUNTIME_DIR, "last_report.txt"))
 LAST_REPORT_XGB_PATH = os.getenv("PREVISOR_LAST_REPORT_XGB_PATH", os.path.join(MODELS_RUNTIME_DIR, "last_report_xgb.txt"))
 
+
+def resolve_artifact_path(runtime_path: str, pretrained_path: str) -> str:
+    """Возвращает runtime путь, если он существует, иначе fallback на pretrained."""
+    if runtime_path and os.path.exists(runtime_path):
+        return runtime_path
+    if pretrained_path and os.path.exists(pretrained_path):
+        return pretrained_path
+    return runtime_path
+
 # -----------------------------
 # Параметры алертинга/уведомлений
 # -----------------------------
@@ -143,13 +201,3 @@ MAX_TELEGRAM_ALERTS_PER_RUN = int(os.getenv("MAX_TELEGRAM_ALERTS_PER_RUN", "5"))
 
 # В real по умолчанию НЕ урезаем функциональность: алерты по классификатору разрешены
 ENABLE_CLASSIFIER_ALERTS_IN_REAL = _env_bool("PREVISOR_CLASSIFIER_ALERTS_IN_REAL", True)
-
-# -----------------------------
-# Celery / Redis
-# -----------------------------
-
-CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
-
-# Интервал автоматического запуска анализа (Celery beat), секунды.
-# Для разработки можно 300, для демонстрации 600.
-COLLECTION_INTERVAL = int(os.getenv("PREVISOR_COLLECTION_INTERVAL", "300"))

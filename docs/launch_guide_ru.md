@@ -50,6 +50,7 @@ Invoke-RestMethod http://127.0.0.1:5000/interfaces
 ```
 
 Если за 30 секунд нет пакетов, попробуйте сгенерировать трафик (открыть сайт или `ping 8.8.8.8 -n 5`).
+Для локальной эмуляции на 127.0.0.1 нужен loopback-адаптер (Npcap Loopback Adapter); если его нет - используйте IP роутера или другого устройства в LAN.
 
 ## 4) Запуск приложения
 Откройте PowerShell **от имени администратора** и запустите:
@@ -63,22 +64,28 @@ Invoke-RestMethod http://127.0.0.1:5000/health
 
 ## 5) Основной пользовательский путь
 1. Откройте UI: http://127.0.0.1:5000/dashboard
-2. Нажмите **Запустить анализ** (или просто ждите — фоновый монитор включен по умолчанию).
-3. Если нужно ускорить обучение аномалий — нажмите **Собрать базовую выборку** несколько раз.
+2. Нажмите **Разовый анализ** (или просто ждите — фоновый монитор включен по умолчанию).
+3. Если нужно ускорить обучение аномалий — нажмите **Накопить baseline** несколько раз.
 4. Когда появятся алерты, бот пришлет уведомление в Telegram.
 
 Параметры по умолчанию:
-- `PREVISOR_AUTO_MONITOR=true`
-- `PREVISOR_AUTO_MONITOR_INTERVAL=300`
+- `PREVISOR_CONTINUOUS_MONITOR=true`
+- `PREVISOR_CONTINUOUS_BATCH_SIZE=200`
+- `PREVISOR_CONTINUOUS_FLUSH_SEC=5`
+- `PREVISOR_CONTINUOUS_QUEUE_MAX=10000`
 - `PREVISOR_BASELINE_TARGET_ROWS=5000`
 - `PREVISOR_ANOMALY_AUTO_TRAIN=true`
+- `PREVISOR_ANOMALY_STRATEGY=baseline`
+- `PREVISOR_ANOMALY_BASELINE_QUANTILE=0.999`
+- `PREVISOR_HEURISTICS_REQUIRE_PRIVATE_TARGET=true` (в real-режиме учитываются только private/loopback цели)
+- `PREVISOR_HEURISTICS_REQUIRE_PRIVATE_SOURCE=true` (в real-режиме учитываются только private/loopback источники)
 
 
 ## 6) Контрольный прогон (от установки до алерта)
 1. Запустите приложение (`python app.py`).
-2. Зайдите в UI и нажмите **Запустить анализ**.
+2. Зайдите в UI и нажмите **Разовый анализ**.
 3. Сгенерируйте небольшой тестовый трафик (см. `docs/threat_emulation_ru.md`).
-4. Снова нажмите **Запустить анализ** или дождитесь следующего цикла авто-монитора.
+4. Снова нажмите **Разовый анализ** или дождитесь следующего цикла мониторинга.
 5. Проверьте Telegram — должно прийти уведомление.
 
 ## 7) Ручной запуск (если нужно)
@@ -89,6 +96,6 @@ Invoke-RestMethod -Method Post "http://127.0.0.1:5000/analyze?mode=real&model=rf
 ## 8) Частые вопросы
 - **Почему нет записей?** Убедитесь, что интерфейс задан правильно и PowerShell запущен от администратора.
 - **Почему нет `ip_cache`?** Кэш заполняется только при успешных запросах в AbuseIPDB и наличии ключа.
-- **Можно ли без Celery?** Да, авто-монитор в `app.py` работает сам.
+- **Как управлять мониторингом?** Используйте `POST /monitor/start`, `POST /monitor/stop` или UI-кнопки.
 
-Разработческие сценарии: `docs/test_scenarios_powershell.md`.
+Разработческие сценарии: `docs/powershell_scenarios.md`.

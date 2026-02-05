@@ -133,7 +133,8 @@ def collect_real_traffic(
             "Scapy недоступен в окружении. Проверьте, что он установлен и импортируется корректно."
         )
 
-    iface = _resolve_iface_name(iface)
+    iface_list = _resolve_iface_names(iface)
+    iface = iface_list if len(iface_list) > 1 else iface_list[0]
 
     rows: list[dict] = []
 
@@ -246,7 +247,15 @@ def collect_real_traffic(
     if bpf_filter:
         sniff_kwargs["filter"] = bpf_filter
 
-    sniff(**sniff_kwargs)  # type: ignore
+    try:
+        sniff(**sniff_kwargs)  # type: ignore
+    except Exception as exc:
+        if isinstance(iface, list) and len(iface) > 1:
+            logger.warning("Multi-iface sniff failed (%s) - fallback to %s", exc, iface[0])
+            sniff_kwargs["iface"] = iface[0]
+            sniff(**sniff_kwargs)  # type: ignore
+        else:
+            raise
 
     if not rows:
         logger.warning("Не удалось захватить пакеты на интерфейсе: %s", iface)
@@ -381,6 +390,36 @@ def _auto_iface(interfaces: List[str]) -> Optional[str]:
             continue
         return name
     return interfaces[0] if interfaces else None
+
+
+def _find_loopback_iface() -> Optional[str]:
+    """Ищет loopback-интерфейс (Npcap Loopback Adapter на Windows или lo на Linux)."""
+    details = list_network_interfaces(details=True)
+    if details:
+        for item in details:
+            name = str(item.get("name") or "")
+            desc = str(item.get("description") or "")
+            guid = str(item.get("guid") or "")
+            blob = " ".join([name, desc, guid]).lower()
+            if "loopback" in blob:
+                return name
+
+    interfaces = list_network_interfaces()
+    for name in interfaces:
+        lower = name.lower()
+        if lower in {"lo"} or "loopback" in lower:
+            return name
+    return None
+
+
+def _resolve_iface_names(requested: str) -> List[str]:
+    """Возвращает список интерфейсов для sniff (основной + loopback при наличии)."""
+    primary = _resolve_iface_name(requested)
+    if os.getenv("PREVISOR_INCLUDE_LOOPBACK", "true").strip().lower() in {"1", "true", "yes", "y", "on"}:
+        loopback = _find_loopback_iface()
+        if loopback and loopback != primary:
+            return [primary, loopback]
+    return [primary]
 
 
 def _resolve_iface_name(requested: str) -> str:

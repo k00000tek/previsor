@@ -2,7 +2,6 @@
 
 ## Предварительно
 - Приложение запущено: `python app.py`
-- Опционально (для периодических запусков): Redis + Celery worker/beat
 - Для `mode=real`: PowerShell от имени администратора и задан `PREVISOR_NET_IFACE`
 - Внутренние режимы demo/test/dataset скрыты в UI, но доступны через API
 
@@ -26,6 +25,13 @@ Invoke-RestMethod http://127.0.0.1:5000/interfaces
 Invoke-RestMethod http://127.0.0.1:5000/health
 ```
 
+
+## 1.1) Старт/стоп мониторинга
+```powershell
+Invoke-RestMethod -Method Post "http://127.0.0.1:5000/monitor/start"
+Invoke-RestMethod -Method Post "http://127.0.0.1:5000/monitor/stop"
+Invoke-RestMethod "http://127.0.0.1:5000/monitor/status"
+```
 ## 2) Demo запуск (без файла)
 ```powershell
 Invoke-RestMethod -Method Post "http://127.0.0.1:5000/analyze?mode=demo&model=rf"

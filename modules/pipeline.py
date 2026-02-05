@@ -57,7 +57,7 @@ class PreVisorPipeline:
 
     Используется одинаково:
     - во Flask (ручной запуск /analyze)
-    - в Celery (автоматический full_pipeline)
+    - в фоновом мониторинге (непрерывные батчи)
 
     Ключевая часть стабильности: выравнивание признаков по схеме обучения (feature schema),
     чтобы инференс не ломался при различиях в наборах колонок.
@@ -72,8 +72,8 @@ class PreVisorPipeline:
         enable_anomalies: bool = True,
         enable_heuristics: bool = HEURISTICS_ENABLED,
         enable_traffic_logs: bool = LOG_TRAFFIC,
-        anomaly_strategy: str = "quantile",     # "quantile" | "threshold"
-        anomaly_quantile: float = 0.99,         # top 1% по "аномальности"
+        anomaly_strategy: Optional[str] = None,     # "baseline" | "quantile" | "threshold"
+        anomaly_quantile: Optional[float] = None,         # top 1% по "аномальности"
         anomaly_threshold: Optional[float] = None,  # legacy: decision_function < threshold
         max_anomaly_alerts: int = 50,            # ограничение числа аномалий на прогон
     ) -> None:
@@ -93,6 +93,7 @@ class PreVisorPipeline:
         """
         self.model_type = str(model_type).strip().lower()
         self.feature_schema_path = feature_schema_path
+        self.feature_schema_fallback_path = getattr(cfg, "FEATURE_SCHEMA_PRETRAINED_PATH", None)
 
         self.enable_classifier = enable_classifier
         self.enable_heuristics = enable_heuristics
@@ -104,8 +105,13 @@ class PreVisorPipeline:
         #   - baseline-модель IsolationForest существует
         self.enable_anomalies = self._should_enable_anomalies(enable_anomalies)
 
-        self.anomaly_strategy = anomaly_strategy
-        self.anomaly_quantile = anomaly_quantile
+        if anomaly_strategy is None or not str(anomaly_strategy).strip():
+            anomaly_strategy = os.getenv("PREVISOR_ANOMALY_STRATEGY", "baseline")
+        self.anomaly_strategy = str(anomaly_strategy).strip().lower()
+
+        if anomaly_quantile is None:
+            anomaly_quantile = float(os.getenv("PREVISOR_ANOMALY_QUANTILE", "0.99"))
+        self.anomaly_quantile = float(anomaly_quantile)
         self.anomaly_threshold = anomaly_threshold
         self.max_anomaly_alerts = max_anomaly_alerts
 
@@ -220,12 +226,25 @@ class PreVisorPipeline:
 
         # 4a) Эвристики (DDoS/port-scan/HTTP)
         if self.enable_heuristics and raw_df is not None:
+            require_private_target = (
+                mode == "real"
+                and os.getenv("PREVISOR_HEURISTICS_REQUIRE_PRIVATE_TARGET", "true").strip().lower()
+                in {"1", "true", "yes", "y", "on"}
+            )
+            require_private_source = (
+                mode == "real"
+                and os.getenv("PREVISOR_HEURISTICS_REQUIRE_PRIVATE_SOURCE", "true").strip().lower()
+                in {"1", "true", "yes", "y", "on"}
+            )
             try:
-                heur_alerts = detect_heuristic_alerts(raw_df)
+                heur_alerts = detect_heuristic_alerts(
+                    raw_df,
+                    require_private_target=require_private_target,
+                    require_private_source=require_private_source,
+                )
                 alerts.extend(self._normalize_heur_alerts(heur_alerts))
             except Exception:
                 logger.exception("Ошибка эвристического детектора")
-
         # 4b) Auto baseline + retrain anomaly model (real mode only)
         if mode == "real" and raw_df is not None:
             policy = BaselinePolicy()
@@ -299,11 +318,16 @@ class PreVisorPipeline:
         """
         X = X.copy()
 
-        if not self.feature_schema_path or not os.path.exists(self.feature_schema_path):
-            logger.warning("feature schema не найдена (%s) — инференс может быть нестабилен", self.feature_schema_path)
-            return X
+        schema_path = self.feature_schema_path
+        if not schema_path or not os.path.exists(schema_path):
+            fallback = self.feature_schema_fallback_path
+            if fallback and os.path.exists(fallback):
+                schema_path = fallback
+            else:
+                logger.warning("feature schema не найдена (%s) — инференс может быть нестабилен", self.feature_schema_path)
+                return X
 
-        feature_cols = joblib.load(self.feature_schema_path)
+        feature_cols = joblib.load(schema_path)
         if not isinstance(feature_cols, (list, tuple)) or not all(isinstance(c, str) for c in feature_cols):
             logger.warning("Некорректный формат feature schema (%s) — пропускаю align_features", type(feature_cols))
             return X

@@ -12,6 +12,7 @@ import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report, confusion_matrix, f1_score
 
+import config as cfg
 from config import (
     LABEL_ENCODER_PATH,
     FEATURE_SCHEMA_PATH,
@@ -261,9 +262,14 @@ class Analyzer:
 
     def load_model(self) -> None:
         """Загружает модель с диска."""
-        if os.path.exists(self.model_path):
-            self.model = joblib.load(self.model_path)
-            logger.info("Модель загружена: %s", self.model_path)
+        fallback = cfg.RF_PRETRAINED_MODEL_PATH if self.model_type == "rf" else cfg.XGB_PRETRAINED_MODEL_PATH
+        resolved = cfg.resolve_artifact_path(self.model_path, fallback)
+        if os.path.exists(resolved):
+            self.model = joblib.load(resolved)
+            if resolved != self.model_path:
+                logger.info("Модель загружена (pretrained): %s", resolved)
+            else:
+                logger.info("Модель загружена: %s", resolved)
         else:
             logger.error("Модель не найдена: %s", self.model_path)
             self.model = None
@@ -292,12 +298,13 @@ class Analyzer:
     def _load_label_encoder(self) -> None:
         """Пробует загрузить LabelEncoder из runtime-пути.
 
-        Если файл отсутствует — оставляет self.label_encoder=None, и decode будет через fallback.
+        Если файл отсутствует - оставляет self.label_encoder=None, и decode будет через fallback.
         """
         try:
-            if os.path.exists(LABEL_ENCODER_PATH):
-                self.label_encoder = joblib.load(LABEL_ENCODER_PATH)
-                logger.info("LabelEncoder загружен: %s", LABEL_ENCODER_PATH)
+            resolved = cfg.resolve_artifact_path(LABEL_ENCODER_PATH, cfg.LABEL_ENCODER_PRETRAINED_PATH)
+            if os.path.exists(resolved):
+                self.label_encoder = joblib.load(resolved)
+                logger.info("LabelEncoder загружен: %s", resolved)
         except Exception as exc:
             logger.warning("Не удалось загрузить LabelEncoder (%s): %s", LABEL_ENCODER_PATH, exc)
             self.label_encoder = None

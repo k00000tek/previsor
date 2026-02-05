@@ -3,42 +3,58 @@ title Диаграмма последовательности PreVisor
 
 actor "Пользователь" as User
 participant "Flask UI\n(Веб-интерфейс)" as Flask
-participant "Авто-монитор\n(app.py)" as Mon
+participant "Монитор\n(app.py)" as Mon
+participant "Collector Thread" as Col
+participant "Processor Thread" as Proc
+participant "Queue\n(in-memory)" as Q
 participant "Сборщик данных\n(DataCollector)" as DC
 participant "Предобработка\n(Preprocessor)" as PP
-participant "Анализатор\n(Analyzer + Heuristics + AnomalyDetector)" as AN
+participant "Пайплайн анализа\n(Analyzer + Heuristics + Anomaly)" as AN
 participant "База данных\n(DB)" as DB
 participant "Threat Intelligence\n(API)" as EXT
 participant "Telegram" as TG
 
-loop Каждые N секунд (PREVISOR_AUTO_MONITOR_INTERVAL)
-  Mon -> DC : collect_traffic()
-  DC -> PP : preprocess_data(raw_logs)
-  PP -> AN : analyze(features)
-  AN -> EXT : check_ip(ip) (опционально)
-  AN -> AN : combine_signals()
+User -> Flask : openDashboard()
+Flask -> Mon : GET /monitor/status
+Mon --> Flask : status
 
+opt Старт мониторинга
+  User -> Flask : Нажать "Старт"
+  Flask -> Mon : POST /monitor/start
+  Mon -> Col : start()
+  Mon -> Proc : start()
+end
+
+loop Непрерывный мониторинг
+  Col -> DC : collect_traffic()
+  DC -> Q : enqueue(batch)
+  Proc -> Q : dequeue(batch)
+  Proc -> PP : preprocess_data(batch)
+  PP -> AN : analyze()
+  AN -> EXT : check_ip(ip) (опционально)
   alt Риск выше порога
-    AN -> DB : insertAlert(alert)
+    AN -> DB : insertAlert()
     AN -> TG : send_alert()
   else Нет угроз
-    AN -> DB : insertLog(traffic_logs)
+    AN -> DB : insertLog()
   end
 end
 
-User -> Flask : openDashboard()
-Flask -> DB : getAlerts(filters)
-DB --> Flask : list_alerts
-Flask --> User : renderDashboard(alerts)
-
-opt Ручной запуск анализа
-  User -> Flask : triggerAnalysis()
-  Flask -> DC : collect_traffic() (или файл)
+opt Разовый анализ
+  User -> Flask : Нажать "Разовый анализ"
+  Flask -> DC : collect_traffic()
   DC -> PP : preprocess_data()
-  PP -> AN : analyze(features)
-  AN -> DB : insertAlert(alert)
-  AN -> TG : send_alert()
-  Flask --> User : showNewAlert()
+  PP -> AN : analyze()
+  AN -> DB : insertAlert()/insertLog()
+  AN -> TG : send_alert() (если есть)
+  Flask --> User : обновление UI
+end
+
+opt Стоп мониторинга
+  User -> Flask : Нажать "Стоп"
+  Flask -> Mon : POST /monitor/stop
+  Mon -> Col : stop()
+  Mon -> Proc : stop()
 end
 
 @enduml

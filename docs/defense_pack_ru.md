@@ -6,18 +6,18 @@
 - Репозиторий актуален, `README.md` соответствует текущему состоянию.
 - `.env` заполнен (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, PREVISOR_NET_IFACE).
 - Приложение запускается: `python app.py`.
-- Работает auto-monitor (по умолчанию): `/monitor/status`.
+- Работает непрерывный мониторинг (по умолчанию): `/monitor/status`.
 - В real-режиме есть записи в `data/runtime/collected_traffic.csv`.
 - Baseline накоплен (5000+ строк) и обучен IsolationForest.
 - Отчеты по обучению в `models/runtime/last_report*.txt`.
 - Telegram-уведомления приходят.
-- UI отображает алерты и позволяет менять статус.
+- UI отображает алерты, статусы и управление мониторингом.
 
 ## 2) Файлы для защиты (предоставить/приложить)
 - Основное описание проекта: `README.md`.
 - Пользовательский путь: `docs/launch_guide_ru.md`.
 - Эмуляция угроз: `docs/threat_emulation_ru.md`.
-- Сценарии разработчика (PowerShell): `docs/test_scenarios_powershell.md`.
+- Сценарии разработчика (PowerShell): `docs/powershell_scenarios.md`.
 - Отчеты обучения: `models/runtime/last_report.txt`, `models/runtime/last_report_xgb.txt`.
 - Артефакты моделей (при необходимости): `models/runtime/*.pkl`.
 - Диаграммы PlantUML (обновленные):

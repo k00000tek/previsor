@@ -17,7 +17,7 @@ from config import DB_PATH
 
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 
-# Для SQLite + многопоточности (Flask/Celery) лучше отключать check_same_thread.
+# Для SQLite + многопоточности (Flask/background) лучше отключать check_same_thread.
 engine = create_engine(
     f"sqlite:///{DB_PATH}",
     echo=False,
