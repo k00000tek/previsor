@@ -59,11 +59,27 @@ def _env_csv_floats(name: str, default: Iterable[float]) -> List[float]:
     return out or list(default)
 
 
+def _csv_floats(raw: Optional[str], default: Iterable[float]) -> List[float]:
+    """Разбирает CSV-строку с float значениями в список."""
+    if not raw:
+        return list(default)
+    out: List[float] = []
+    for part in str(raw).split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            out.append(float(part))
+        except Exception:
+            continue
+    return out or list(default)
+
+
 @dataclass
 class AnomalyPolicy:
     """Политика детекции аномалий.
 
-    Attributes:
+    Атрибуты:
         contamination: Доля аномалий для IsolationForest (грубая априорная оценка).
         quantile: Квантиль anomaly_score для отбора (например 0.99 = топ-1%).
         max_alerts: Максимум алертов-анoмалий за прогон.
@@ -75,12 +91,21 @@ class AnomalyPolicy:
     quantile: float = _env_float("PREVISOR_ANOMALY_QUANTILE", 0.99)
     max_alerts: int = _env_int("PREVISOR_ANOMALY_MAX_ALERTS", 50)
     require_pred_minus1: bool = os.getenv("PREVISOR_ANOMALY_REQUIRE_MINUS1", "true").strip().lower() in {"1", "true", "yes", "y", "on"}
-    decision_threshold: float = _env_float("PREVISOR_ANOMALY_DECISION_THRESHOLD", -0.1)
+    decision_threshold: float = _env_float(
+        "PREVISOR_ANOMALY_DECISION_THRESHOLD",
+        float(getattr(cfg, "PREVISOR_ANOMALY_DECISION_THRESHOLD", 0.0)),
+    )
     strategy: str = os.getenv("PREVISOR_ANOMALY_STRATEGY", "baseline").strip().lower()
-    baseline_quantile: float = _env_float("PREVISOR_ANOMALY_BASELINE_QUANTILE", 0.999)
+    baseline_quantile: float = _env_float(
+        "PREVISOR_ANOMALY_BASELINE_QUANTILE",
+        float(getattr(cfg, "PREVISOR_ANOMALY_BASELINE_QUANTILE", 0.999)),
+    )
     baseline_quantiles: List[float] = field(default_factory=lambda: _env_csv_floats(
         "PREVISOR_ANOMALY_BASELINE_QUANTILES",
-        default=[0.95, 0.99, 0.995, 0.999],
+        default=_csv_floats(
+            getattr(cfg, "PREVISOR_ANOMALY_BASELINE_QUANTILES", None),
+            default=[0.95, 0.99, 0.995, 0.999],
+        ),
     ))
 
 
@@ -123,7 +148,7 @@ class AnomalyDetector:
             contamination=float(contamination),
             random_state=int(random_state),
             n_estimators=200,
-            n_jobs=-1,
+            n_jobs=int(_env_int("PREVISOR_SKLEARN_N_JOBS", 1)),
         )
 
     def fit(self, X: Union[pd.DataFrame, np.ndarray]) -> None:
@@ -167,6 +192,14 @@ class AnomalyDetector:
 
 
 def _normalize_quantiles(values: Iterable[float]) -> List[float]:
+    """Нормализует список квантилей и приводит его к уникальному отсортированному виду.
+
+    Args:
+        values: Итерируемый набор квантилей.
+
+    Returns:
+        Отсортированный список уникальных квантилей в диапазоне 0.5..0.9999.
+    """
     out: List[float] = []
     for raw in values:
         try:
@@ -186,13 +219,24 @@ def compute_anomaly_stats(
     *,
     model: IsolationForest,
     quantiles: Iterable[float],
+    baseline_rows: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Computes baseline anomaly score stats for thresholding."""
+    """Считает статистику anomaly_score для baseline (для порогов и нормировки).
+
+    Args:
+        X: Матрица признаков (после предобработки).
+        model: Обученная модель IsolationForest.
+        quantiles: Квантили anomaly_score, которые нужно посчитать.
+        baseline_rows: Число строк в baseline CSV (до предобработки), если известно.
+
+    Returns:
+        Словарь со статистикой и квантилями anomaly_score.
+    """
     decision = model.decision_function(X)
     score = -decision.astype(float)
     quantiles = _normalize_quantiles(quantiles)
     q_map = {str(q): float(np.quantile(score, q)) for q in quantiles}
-    return {
+    out: Dict[str, Any] = {
         "created_at": datetime.now(timezone.utc).isoformat(),
         "rows": int(len(score)),
         "score_min": float(np.min(score)) if len(score) else 0.0,
@@ -201,10 +245,13 @@ def compute_anomaly_stats(
         "score_std": float(np.std(score)) if len(score) else 0.0,
         "quantiles": q_map,
     }
+    if baseline_rows is not None:
+        out["baseline_rows"] = int(baseline_rows)
+    return out
 
 
 def save_anomaly_stats(stats: Dict[str, Any], path: str) -> bool:
-    """Saves anomaly stats to JSON."""
+    """Сохраняет статистику baseline детектора в JSON."""
     if not path:
         return False
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -219,7 +266,7 @@ def save_anomaly_stats(stats: Dict[str, Any], path: str) -> bool:
 
 
 def load_anomaly_stats(path: Optional[str], fallback_path: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """Loads anomaly stats from JSON."""
+    """Загружает статистику baseline детектора из JSON."""
     for candidate in (path, fallback_path):
         if not candidate or not os.path.exists(candidate):
             continue
@@ -233,6 +280,15 @@ def load_anomaly_stats(path: Optional[str], fallback_path: Optional[str] = None)
 
 
 def _select_stats_threshold(stats: Dict[str, Any], target_q: float) -> Optional[float]:
+    """Выбирает порог anomaly_score из baseline-статистики по ближайшему квантилю.
+
+    Args:
+        stats: Статистика baseline (compute_anomaly_stats).
+        target_q: Целевой квантиль (например 0.999).
+
+    Returns:
+        Значение порога anomaly_score или None, если порог извлечь не удалось.
+    """
     quantiles = stats.get("quantiles") or {}
     parsed: List[Tuple[float, float]] = []
     for key, value in quantiles.items():
@@ -248,6 +304,18 @@ def _select_stats_threshold(stats: Dict[str, Any], target_q: float) -> Optional[
 
 
 def _normalize_scores(scores: np.ndarray, stats: Optional[Dict[str, Any]]) -> np.ndarray:
+    """Нормирует anomaly_score в диапазон 0..1.
+
+    Если доступна baseline-статистика (score_min/score_max), нормировка выполняется по ней,
+    иначе — по min/max текущего батча.
+
+    Args:
+        scores: Массив anomaly_score.
+        stats: Baseline-статистика (опционально).
+
+    Returns:
+        Массив нормированных значений 0..1.
+    """
     if stats and isinstance(stats, dict):
         s_min = stats.get("score_min")
         s_max = stats.get("score_max")
@@ -407,6 +475,7 @@ def detect_anomalies(
                 "probability": prob,  # 0..1
                 "timestamp": now,
                 "source_ip": ip,
+                "row_index": int(i),
             }
         )
 

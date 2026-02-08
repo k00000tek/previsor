@@ -53,7 +53,7 @@ Invoke-WebRequest -Method Post "http://127.0.0.1:5000/analyze?mode=dataset&model
 Invoke-RestMethod -Method Post "http://127.0.0.1:5000/analyze?mode=real&model=rf"
 ```
 
-## 6) Ручной baseline append (real)
+## 6) Ручное накопление baseline (в БД, real)
 ```powershell
 Invoke-RestMethod "http://127.0.0.1:5000/collect?mode=real&baseline=1&rows=200"
 ```

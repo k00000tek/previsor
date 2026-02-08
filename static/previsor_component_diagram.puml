@@ -43,6 +43,7 @@ package "Runtime Monitor (app.py)" {
   [Collector Thread]
   [Processor Thread]
   [In-Memory Queue\n(queue.Queue)]
+  [Telegram Polling Thread]
 }
 
 database "Data Storage" {
@@ -51,7 +52,7 @@ database "Data Storage" {
 
 cloud "External Services (Optional)" {
   [Threat Intelligence API\n(AbuseIPDB)]
-  [Telegram Bot\n(notifications)]
+  [Telegram Bot API\n(api.telegram.org)]
 }
 
 ' === Связи ===
@@ -64,20 +65,21 @@ cloud "External Services (Optional)" {
 [Threat Pipeline\n(modules.pipeline)] --> [Heuristics\n(modules.heuristics)] : raw rows
 [Threat Pipeline\n(modules.pipeline)] --> [Classifier Analyzer\n(modules.analyzer)] : classification
 [Threat Pipeline\n(modules.pipeline)] --> [Anomaly Detector\n(modules.anomaly_detector)] : anomalies
-[Threat Pipeline\n(modules.pipeline)] --> [Baseline Manager\n(modules.baseline_manager)] : baseline/retrain
 
-[Classifier Analyzer\n(modules.analyzer)] --> [SQLite DB\n(db/runtime/previsor.db)] : alerts
-[Anomaly Detector\n(modules.anomaly_detector)] --> [SQLite DB\n(db/runtime/previsor.db)] : anomaly alerts
 [Threat Pipeline\n(modules.pipeline)] --> [SQLite DB\n(db/runtime/previsor.db)] : traffic_logs
 [API Integration\n(utils.api_integration)] --> [SQLite DB\n(db/runtime/previsor.db)] : ip_cache
 
-[Flask Web App\n(app.py, templates/dashboard.html)] --> [SQLite DB\n(db/runtime/previsor.db)] : read alerts/logs
+[Flask Web App\n(app.py, templates/dashboard.html)] --> [SQLite DB\n(db/runtime/previsor.db)] : alerts/logs CRUD
 [Flask Web App\n(app.py, templates/dashboard.html)] --> [Threat Pipeline\n(modules.pipeline)] : manual analysis
 [Flask Web App\n(app.py, templates/dashboard.html)] --> [Collector Thread] : start/stop monitor
+[Flask Web App\n(app.py, templates/dashboard.html)] --> [Baseline Manager\n(modules.baseline_manager)] : retrain IF from DB
+[Baseline Manager\n(modules.baseline_manager)] --> [SQLite DB\n(db/runtime/previsor.db)] : read traffic_logs + alert statuses
 
 [Classifier Analyzer\n(modules.analyzer)] --> [API Integration\n(utils.api_integration)] : check IP reputation
 [API Integration\n(utils.api_integration)] --> [Threat Intelligence API\n(AbuseIPDB)] : HTTP requests
 
-[Flask Web App\n(app.py, templates/dashboard.html)] --> [Telegram Bot\n(notifications)] : notify alerts
+[Flask Web App\n(app.py, templates/dashboard.html)] --> [Telegram Bot API\n(api.telegram.org)] : sendMessage (alerts)
+[Telegram Polling Thread] --> [Telegram Bot API\n(api.telegram.org)] : getUpdates (commands)
+[Telegram Polling Thread] --> [Flask Web App\n(app.py, templates/dashboard.html)] : handle /start,/selectchat,...
 
 @enduml

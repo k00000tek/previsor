@@ -92,7 +92,7 @@ DATASET_NAME = os.getenv("PREVISOR_DATASET_NAME", "cicids2017_processed.csv")  #
 # Реальный сбор трафика (MODE="real")
 # -----------------------------
 
-NETWORK_INTERFACE = os.getenv("PREVISOR_NET_IFACE", "auto")
+NETWORK_INTERFACE = os.getenv("PREVISOR_NET_IFACE", "Беспроводная сеть")
 PACKET_COUNT_PER_COLLECTION = int(os.getenv("PREVISOR_PACKET_COUNT", "200"))
 PACKET_SNIFF_TIMEOUT_SEC = int(os.getenv("PREVISOR_PACKET_TIMEOUT", "30"))
 BPF_FILTER = os.getenv("PREVISOR_BPF_FILTER", "")  # например: "tcp or udp"
@@ -105,12 +105,6 @@ BPF_FILTER = os.getenv("PREVISOR_BPF_FILTER", "")  # например: "tcp or u
 COLLECTED_TRAFFIC_CSV = os.getenv(
     "PREVISOR_COLLECTED_TRAFFIC_CSV",
     os.path.join(DATA_RUNTIME_DIR, "collected_traffic.csv"),
-)
-
-# Baseline-накопление для обучения детектора аномалий
-BASELINE_TRAFFIC_CSV = os.getenv(
-    "PREVISOR_BASELINE_TRAFFIC_CSV",
-    os.path.join(DATA_RUNTIME_DIR, "baseline_traffic.csv"),
 )
 
 # -----------------------------
@@ -199,5 +193,42 @@ def resolve_artifact_path(runtime_path: str, pretrained_path: str) -> str:
 
 MAX_TELEGRAM_ALERTS_PER_RUN = int(os.getenv("MAX_TELEGRAM_ALERTS_PER_RUN", "5"))
 
-# В real по умолчанию НЕ урезаем функциональность: алерты по классификатору разрешены
-ENABLE_CLASSIFIER_ALERTS_IN_REAL = _env_bool("PREVISOR_CLASSIFIER_ALERTS_IN_REAL", True)
+# -----------------------------
+# Внешние сервисы и каналы уведомлений
+# -----------------------------
+
+# Threat Intel (например, AbuseIPDB)
+ABUSEIPDB_KEY = os.getenv(
+    "ABUSEIPDB_KEY",
+    "f6654debe874c838ab6271680260e642ab2178c88dc35f4e0d8c11d7e184b43e361f24d1e05b5118",
+)
+
+# Telegram уведомления
+TELEGRAM_BOT_TOKEN = os.getenv(
+    "TELEGRAM_BOT_TOKEN",
+    "8478758709:AAHeApTfPirUh7dcjzxxa2fxqOW5CwKxexo",
+)
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "-5026845212")
+TELEGRAM_API_BASE = os.getenv("TELEGRAM_API_BASE", "https://api.telegram.org")
+TELEGRAM_TIMEOUT_SEC = int(os.getenv("TELEGRAM_TIMEOUT_SEC", "10"))
+PREVISOR_TELEGRAM_ENABLED = _env_bool("PREVISOR_TELEGRAM_ENABLED", True)
+PREVISOR_TELEGRAM_COMMANDS = _env_bool("PREVISOR_TELEGRAM_COMMANDS", True)
+
+# -----------------------------
+# Настройки непрерывного мониторинга
+# -----------------------------
+
+PREVISOR_CONTINUOUS_MONITOR = _env_bool("PREVISOR_CONTINUOUS_MONITOR", True)
+PREVISOR_CONTINUOUS_BATCH_SIZE = int(os.getenv("PREVISOR_CONTINUOUS_BATCH_SIZE", "500"))
+PREVISOR_CONTINUOUS_FLUSH_SEC = float(os.getenv("PREVISOR_CONTINUOUS_FLUSH_SEC", "3"))
+PREVISOR_CONTINUOUS_QUEUE_MAX = int(os.getenv("PREVISOR_CONTINUOUS_QUEUE_MAX", "10000"))
+
+# -----------------------------
+# Настройки аномалий (IsolationForest)
+# -----------------------------
+
+PREVISOR_ANOMALY_STRATEGY = os.getenv("PREVISOR_ANOMALY_STRATEGY", "baseline")
+PREVISOR_ANOMALY_DECISION_THRESHOLD = float(os.getenv("PREVISOR_ANOMALY_DECISION_THRESHOLD", "0.0"))
+PREVISOR_ANOMALY_BASELINE_QUANTILE = float(os.getenv("PREVISOR_ANOMALY_BASELINE_QUANTILE", "0.999"))
+PREVISOR_ANOMALY_BASELINE_QUANTILES = os.getenv("PREVISOR_ANOMALY_BASELINE_QUANTILES", "0.95,0.99,0.995,0.999")
+PREVISOR_ANOMALY_RETRAIN_ROWS = int(os.getenv("PREVISOR_ANOMALY_RETRAIN_ROWS", "5000"))

@@ -28,7 +28,7 @@ warnings.filterwarnings("ignore", category=PerformanceWarning)
 class PreprocessorArtifacts:
     """Артефакты предобработки, общие для train и inference.
 
-    Attributes:
+    Атрибуты:
         scaler: Объект масштабирования (MinMaxScaler/StandardScaler).
         scaler_columns: Список колонок, на которых обучался scaler (порядок важен).
         http_ohe: OneHotEncoder для http_method.

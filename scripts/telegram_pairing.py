@@ -74,7 +74,13 @@ def main() -> int:
     """
     args = _parse_args()
 
-    updates = fetch_telegram_updates(limit=args.limit)
+    try:
+        updates = fetch_telegram_updates(limit=args.limit)
+    except Exception as exc:
+        print(f"Ошибка Telegram API: {exc}")
+        print("Подсказка: если у бота активирован webhook, polling через getUpdates работать не будет.")
+        print("Проверь: GET /telegram/webhook_info (в запущенном PreVisor) или отключи webhook через deleteWebhook.")
+        return 3
     candidates = extract_chat_candidates(updates)
 
     if not candidates:

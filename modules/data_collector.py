@@ -14,7 +14,6 @@ from config import (
     SAMPLES_DIR,
     DATA_RUNTIME_DIR,
     COLLECTED_TRAFFIC_CSV,
-    BASELINE_TRAFFIC_CSV,
     DATASETS_DIR,
     DATASET_NAME,
     DEMO_SOURCE,
@@ -95,12 +94,6 @@ def _default_output_csv() -> str:
     """Возвращает дефолтный путь сохранения собранного трафика в runtime."""
     os.makedirs(DATA_RUNTIME_DIR, exist_ok=True)
     return COLLECTED_TRAFFIC_CSV
-
-
-def _default_baseline_csv() -> str:
-    """Возвращает дефолтный путь накопления baseline-трафика в runtime."""
-    os.makedirs(DATA_RUNTIME_DIR, exist_ok=True)
-    return BASELINE_TRAFFIC_CSV
 
 
 def collect_real_traffic(
@@ -286,44 +279,133 @@ def collect_real_traffic(
 def collect_simulated_traffic(*, num_rows: int) -> pd.DataFrame:
     """Генерация симулированных строк трафика для внутренних режимов.
 
+    Важно: для демонстрации эвристик (Port Scanning/DDoS/HTTP Anomaly)
+    создаются «паттерн-строки», которые гарантированно триггерят детекторы,
+    если num_rows достаточно велик.
+
     Args:
         num_rows: Сколько строк сгенерировать.
 
     Returns:
         DataFrame с колонками, совместимыми с базовой предобработкой.
     """
+    from modules.heuristics import HeuristicPolicy
+
     attack_types = ["Normal Traffic", "DDoS", "Port Scanning", "Brute Force", "Web Attacks", "Anomaly"]
     http_methods = [None, "GET", "POST", "HEAD"]
 
-    rows = []
-    for _ in range(int(num_rows)):
+    policy = HeuristicPolicy()
+
+    def _rand_row(
+        *,
+        src_ip: Optional[str] = None,
+        dst_ip: Optional[str] = None,
+        src_port: Optional[int] = None,
+        dst_port: Optional[int] = None,
+        http_method: Optional[str] = None,
+        url: Optional[str] = None,
+        host: Optional[str] = None,
+    ) -> dict:
+        """Формирует одну строку «сырого» трафика для симуляции.
+
+        Args:
+            src_ip: IP источника (если None — будет сгенерирован).
+            dst_ip: IP назначения (если None — будет сгенерирован).
+            src_port: Порт источника (если None — будет сгенерирован).
+            dst_port: Порт назначения (если None — будет сгенерирован).
+            http_method: HTTP метод (если None — будет выбран случайно).
+            url: URL (опционально).
+            host: Host (опционально).
+
+        Returns:
+            Словарь с полями строки трафика.
+        """
         ts = fake.date_time_this_year()
-        src_ip = fake.ipv4()
-        dst_ip = fake.ipv4()
+        src_ip = src_ip or fake.ipv4()
+        dst_ip = dst_ip or fake.ipv4()
 
         proto = int(np.random.choice([6, 17], p=[0.75, 0.25]))
-        src_port = int(np.random.randint(1024, 65536))
-        dst_port = int(np.random.randint(1, 65536))
+        src_port = int(src_port if src_port is not None else np.random.randint(1024, 65536))
+        dst_port = int(dst_port if dst_port is not None else np.random.randint(1, 65536))
 
-        http_method = np.random.choice(http_methods, p=[0.7, 0.1, 0.15, 0.05])
+        http_method = http_method if http_method is not None else np.random.choice(http_methods, p=[0.7, 0.1, 0.15, 0.05])
         attack = np.random.choice(attack_types, p=[0.85, 0.03, 0.04, 0.03, 0.03, 0.02])
 
+        return {
+            "timestamp": ts,
+            "source_ip": src_ip,
+            "dest_ip": dst_ip,
+            "protocol": proto,
+            "src_port": src_port,
+            "dest_port": dst_port,
+            "packet_len": int(np.random.randint(60, 1500)),
+            "ttl": int(np.random.randint(32, 129)),
+            "tcp_flags": int(np.random.randint(0, 64)) if proto == 6 else None,
+            "packet_count": 1,
+            "http_method": http_method,
+            "host": host,
+            "url": url,
+            "Attack Type": attack,
+        }
+
+    rows: List[dict] = []
+
+    # Паттерны для эвристик (если хватает места)
+    portscan_unique = max(1, int(policy.portscan_min_unique_ports))
+    portscan_total = max(portscan_unique, int(policy.portscan_min_total_packets))
+    ddos_unique = max(1, int(policy.ddos_min_unique_sources))
+    ddos_total = max(ddos_unique, int(policy.ddos_min_total_packets))
+    susp_hits = max(1, int(policy.suspicious_port_min_hits))
+    http_hits = 1
+
+    required = portscan_total + ddos_total + susp_hits + http_hits
+    if int(num_rows) >= required:
+        # Suspicious Port
+        susp_port = policy.suspicious_ports[0] if policy.suspicious_ports else 22
+        susp_src = fake.ipv4_private()
+        susp_dst = fake.ipv4_private()
+        for _ in range(susp_hits):
+            rows.append(_rand_row(src_ip=susp_src, dst_ip=susp_dst, dst_port=susp_port))
+
+        # Port Scanning
+        scan_src = fake.ipv4_private()
+        scan_dst = fake.ipv4_private()
+        scan_ports = np.random.choice(range(1, 65536), size=portscan_unique, replace=False)
+        for port in scan_ports:
+            rows.append(_rand_row(src_ip=scan_src, dst_ip=scan_dst, dst_port=int(port)))
+        for _ in range(portscan_total - portscan_unique):
+            port = int(np.random.choice(scan_ports))
+            rows.append(_rand_row(src_ip=scan_src, dst_ip=scan_dst, dst_port=port))
+
+        # DDoS
+        ddos_target = fake.ipv4_private()
+        ddos_sources = [fake.ipv4_private() for _ in range(ddos_unique)]
+        for i in range(ddos_total):
+            src = ddos_sources[i % ddos_unique]
+            rows.append(_rand_row(src_ip=src, dst_ip=ddos_target, dst_port=int(np.random.randint(1, 65536))))
+
+        # HTTP Anomaly
         rows.append(
-            {
-                "timestamp": ts,
-                "source_ip": src_ip,
-                "dest_ip": dst_ip,
-                "protocol": proto,
-                "src_port": src_port,
-                "dest_port": dst_port,
-                "packet_len": int(np.random.randint(60, 1500)),
-                "ttl": int(np.random.randint(32, 129)),
-                "tcp_flags": int(np.random.randint(0, 64)) if proto == 6 else None,
-                "packet_count": 1,
-                "http_method": http_method,
-                "Attack Type": attack,
-            }
+            _rand_row(
+                src_ip=fake.ipv4_private(),
+                dst_ip=fake.ipv4_private(),
+                dst_port=80,
+                http_method="GET",
+                host="example.local",
+                url="http://example.local/?q=../etc/passwd",
+            )
         )
+    else:
+        logger.warning(
+            "num_rows=%s слишком мал для полной эмуляции эвристик (нужно >= %s); генерирую только базовые строки.",
+            num_rows,
+            required,
+        )
+
+    # Остальные строки — случайные
+    remaining = max(0, int(num_rows) - len(rows))
+    for _ in range(remaining):
+        rows.append(_rand_row())
 
     return pd.DataFrame(rows)
 
@@ -538,7 +620,6 @@ def collect_traffic(
     mode: CollectorMode = MODE,  # type: ignore[assignment]
     save_csv: bool = True,
     output_csv: Optional[str] = None,
-    baseline: bool = False,
     # Параметры захвата для режима real
     iface: str = NETWORK_INTERFACE,
     num_packets: int = PACKET_COUNT_PER_COLLECTION,
@@ -559,7 +640,6 @@ def collect_traffic(
         mode: "real" | "demo" | "test" | "dataset".
         save_csv: Сохранять ли собранные данные в CSV.
         output_csv: Явный путь для сохранения (если не задан — сохранение в data/runtime/collected_traffic.csv).
-        baseline: Если True — вместо перезаписи используем накопление baseline (append) в baseline_traffic.csv.
         iface: Имя интерфейса (только для mode="real").
         num_packets: Количество пакетов за один сбор (только для mode="real").
         timeout_sec: Таймаут захвата (сек), только для mode="real".
@@ -591,16 +671,10 @@ def collect_traffic(
 
     if save_csv:
         if output_csv is None:
-            output_csv = _default_baseline_csv() if baseline else _default_output_csv()
+            output_csv = _default_output_csv()
 
         os.makedirs(os.path.dirname(output_csv), exist_ok=True)
-
-        if baseline:
-            file_exists = os.path.exists(output_csv) and os.path.getsize(output_csv) > 0
-            df.to_csv(output_csv, mode="a", header=not file_exists, index=False)
-            logger.info("Baseline обновлён (append): %s (rows=%s)", output_csv, len(df))
-        else:
-            df.to_csv(output_csv, index=False)
-            logger.info("Данные сохранены: %s", output_csv)
+        df.to_csv(output_csv, index=False)
+        logger.info("Данные сохранены: %s", output_csv)
 
     return df

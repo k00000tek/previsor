@@ -6,14 +6,11 @@ import os
 import textwrap
 import time
 from dataclasses import dataclass
-from email.mime.text import MIMEText
 from typing import Iterable, List, Optional, Tuple
 
 import requests
-import smtplib
-from dotenv import load_dotenv
 
-load_dotenv()
+import config as cfg
 
 logger = logging.getLogger(__name__)
 if not logging.getLogger().handlers:
@@ -83,7 +80,7 @@ def _chunks(text: str, limit: int) -> Iterable[str]:
 class TelegramConfig:
     """Конфигурация Telegram-уведомлений.
 
-    Attributes:
+    Атрибуты:
         token: Токен бота.
         chat_ids: Один или несколько chat_id (через запятую), куда слать уведомления.
         enabled: Включён ли канал Telegram.
@@ -104,11 +101,11 @@ def _telegram_config() -> TelegramConfig:
     Returns:
         TelegramConfig.
     """
-    token = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
-    chat_ids = _split_csv(os.getenv("TELEGRAM_CHAT_ID") or "")
-    enabled = _env_bool("PREVISOR_TELEGRAM_ENABLED", True)
-    api_base = (os.getenv("TELEGRAM_API_BASE") or "https://api.telegram.org").rstrip("/")
-    timeout_sec = int(os.getenv("TELEGRAM_TIMEOUT_SEC", "10"))
+    token = (os.getenv("TELEGRAM_BOT_TOKEN") or getattr(cfg, "TELEGRAM_BOT_TOKEN", "")).strip()
+    chat_ids = _split_csv(os.getenv("TELEGRAM_CHAT_ID") or getattr(cfg, "TELEGRAM_CHAT_ID", ""))
+    enabled = _env_bool("PREVISOR_TELEGRAM_ENABLED", getattr(cfg, "PREVISOR_TELEGRAM_ENABLED", True))
+    api_base = (os.getenv("TELEGRAM_API_BASE") or getattr(cfg, "TELEGRAM_API_BASE", "https://api.telegram.org")).rstrip("/")
+    timeout_sec = int(os.getenv("TELEGRAM_TIMEOUT_SEC", str(getattr(cfg, "TELEGRAM_TIMEOUT_SEC", 10))))
     return TelegramConfig(
         token=token,
         chat_ids=chat_ids,
@@ -128,6 +125,18 @@ def _telegram_ready(cfg: TelegramConfig) -> bool:
         True, если можно отправлять сообщения.
     """
     return bool(cfg.enabled and cfg.token and cfg.chat_ids)
+
+
+def telegram_status() -> dict:
+    """Возвращает краткий статус Telegram-канала (без раскрытия токена)."""
+    cfg = _telegram_config()
+    return {
+        "enabled": bool(cfg.enabled),
+        "ready": _telegram_ready(cfg),
+        "configured": bool(cfg.token and cfg.chat_ids),
+        "chat_ids_count": len(cfg.chat_ids),
+        "api_base": cfg.api_base,
+    }
 
 
 def send_telegram(message: str) -> bool:
@@ -215,6 +224,30 @@ def send_telegram(message: str) -> bool:
     return delivered_any
 
 
+def send_telegram_to(chat_id: str, message: str) -> bool:
+    """Отправляет сообщение в конкретный chat_id (минует TELEGRAM_CHAT_ID)."""
+    cfg = _telegram_config()
+    if not cfg.token or not chat_id:
+        return False
+
+    url = f"{cfg.api_base}/bot{cfg.token}/sendMessage"
+    parts = list(_chunks(message, limit=4096))
+    delivered_any = False
+
+    for part in parts:
+        payload = {"chat_id": str(chat_id), "text": part, "parse_mode": "HTML"}
+        try:
+            resp = requests.post(url, data=payload, timeout=cfg.timeout_sec)
+            ok = (resp.status_code == 200) and (resp.json().get("ok") is True)
+            if ok:
+                delivered_any = True
+                continue
+            logger.error("Telegram error %s: %s", resp.status_code, resp.text)
+        except Exception as exc:
+            logger.error("Telegram exception: %s", exc)
+    return delivered_any
+
+
 def fetch_telegram_updates(*, limit: int = 50, offset: Optional[int] = None) -> dict:
     """Получает updates у Telegram-бота.
 
@@ -237,7 +270,101 @@ def fetch_telegram_updates(*, limit: int = 50, offset: Optional[int] = None) -> 
     if offset is not None:
         payload["offset"] = int(offset)
 
-    resp = requests.get(url, params=payload, timeout=cfg.timeout_sec)
+    max_retries = max(1, int(os.getenv("PREVISOR_TELEGRAM_MAX_RETRIES", "3")))
+    backoff_base = float(os.getenv("PREVISOR_TELEGRAM_RETRY_BASE_SEC", "1.0"))
+
+    last_exc: Optional[Exception] = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            resp = requests.get(url, params=payload, timeout=cfg.timeout_sec)
+            if resp.status_code == 409:
+                # Обычно это означает, что у бота включён webhook, и getUpdates работать не будет.
+                raise RuntimeError(
+                    "Telegram getUpdates вернул 409 Conflict. "
+                    "Скорее всего у бота активирован webhook. "
+                    "Проверьте getWebhookInfo и отключите webhook (deleteWebhook), "
+                    "либо используйте /telegram/webhook."
+                )
+
+            if resp.status_code == 429 and attempt < max_retries:
+                retry_after = None
+                try:
+                    retry_after = resp.json().get("parameters", {}).get("retry_after")
+                except Exception:
+                    retry_after = None
+                sleep_s = float(retry_after or (backoff_base * (2 ** (attempt - 1))))
+                logger.warning("Telegram getUpdates rate limited (429), retry in %.1fs", sleep_s)
+                time.sleep(sleep_s)
+                continue
+
+            if resp.status_code in {500, 502, 503, 504} and attempt < max_retries:
+                sleep_s = backoff_base * (2 ** (attempt - 1))
+                logger.warning("Telegram getUpdates temporary error %s, retry in %.1fs", resp.status_code, sleep_s)
+                time.sleep(sleep_s)
+                continue
+
+            resp.raise_for_status()
+            return resp.json()
+        except requests.exceptions.SSLError as exc:
+            last_exc = exc
+            if attempt < max_retries:
+                sleep_s = backoff_base * (2 ** (attempt - 1))
+                logger.warning("Telegram getUpdates SSL error: %s (retry in %.1fs)", exc, sleep_s)
+                time.sleep(sleep_s)
+                continue
+            raise
+        except requests.exceptions.RequestException as exc:
+            last_exc = exc
+            if attempt < max_retries:
+                sleep_s = backoff_base * (2 ** (attempt - 1))
+                logger.warning("Telegram getUpdates error: %s (retry in %.1fs)", exc, sleep_s)
+                time.sleep(sleep_s)
+                continue
+            raise
+        except Exception as exc:
+            last_exc = exc
+            if attempt < max_retries:
+                sleep_s = backoff_base * (2 ** (attempt - 1))
+                logger.warning("Telegram getUpdates exception: %s (retry in %.1fs)", exc, sleep_s)
+                time.sleep(sleep_s)
+                continue
+            raise
+
+    raise RuntimeError(f"Telegram getUpdates failed after {max_retries} retries: {last_exc}")
+
+
+def get_telegram_webhook_info() -> dict:
+    """Запрашивает getWebhookInfo у Telegram Bot API.
+
+    Returns:
+        JSON-ответ Telegram Bot API.
+    """
+    cfg = _telegram_config()
+    if not cfg.token:
+        raise RuntimeError("TELEGRAM_BOT_TOKEN не задан")
+    url = f"{cfg.api_base}/bot{cfg.token}/getWebhookInfo"
+    resp = requests.get(url, timeout=cfg.timeout_sec)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def delete_telegram_webhook(*, drop_pending_updates: bool = True) -> dict:
+    """Отключает webhook у Telegram-бота (deleteWebhook).
+
+    Используйте это, если хотите работать в режиме polling (getUpdates).
+
+    Args:
+        drop_pending_updates: Удалить ли накопленные updates на стороне Telegram.
+
+    Returns:
+        JSON-ответ Telegram Bot API.
+    """
+    cfg = _telegram_config()
+    if not cfg.token:
+        raise RuntimeError("TELEGRAM_BOT_TOKEN не задан")
+    url = f"{cfg.api_base}/bot{cfg.token}/deleteWebhook"
+    payload = {"drop_pending_updates": "true" if drop_pending_updates else "false"}
+    resp = requests.post(url, data=payload, timeout=cfg.timeout_sec)
     resp.raise_for_status()
     return resp.json()
 
@@ -280,49 +407,6 @@ def extract_chat_candidates(updates_json: dict) -> List[Tuple[str, str]]:
     return list(reversed(uniq))
 
 
-def send_email(subject: str, body: str) -> bool:
-    """Отправляет email-уведомление через SMTP.
-
-    Канал email сейчас не используется по умолчанию (в PreVisor основной канал — Telegram),
-    но оставлен как опциональное расширение.
-
-    Переменные окружения:
-        SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, EMAIL_TO
-
-    Args:
-        subject: Тема письма.
-        body: Тело письма в формате HTML.
-
-    Returns:
-        True, если письмо отправлено, иначе False.
-    """
-    smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
-    smtp_port = int(os.getenv("SMTP_PORT", "587"))
-    smtp_user = os.getenv("SMTP_USER")
-    smtp_pass = os.getenv("SMTP_PASS")
-    email_to = os.getenv("EMAIL_TO")
-
-    if not all([smtp_host, smtp_user, smtp_pass, email_to]):
-        logger.warning("Email: SMTP настройки не заданы (пропуск отправки)")
-        return False
-
-    msg = MIMEText(body, "html")
-    msg["Subject"] = subject
-    msg["From"] = smtp_user
-    msg["To"] = email_to
-
-    try:
-        with smtplib.SMTP(smtp_host, smtp_port) as server:
-            server.starttls()
-            server.login(smtp_user, smtp_pass)
-            server.send_message(msg)
-        logger.info("Email: отправлено")
-        return True
-    except Exception as exc:
-        logger.error("Email error: %s", exc)
-        return False
-
-
 def notify_new_alert(alert_type: str, probability: float, source_ip: Optional[str] = None) -> bool:
     """Отправляет уведомление об одном новом алерте.
 
@@ -349,13 +433,12 @@ def notify_new_alert(alert_type: str, probability: float, source_ip: Optional[st
         """
     ).strip()
 
-    ok = send_telegram(msg)
-    # ok = ok or send_email("PreVisor: Новая угроза", msg)
-    return ok
+    return send_telegram(msg)
 
 
 def notify_pipeline_summary(
     *,
+    mode: str,
     model_type: str,
     total_alerts: int,
     new_alerts: int,
@@ -366,6 +449,7 @@ def notify_pipeline_summary(
     """Отправляет компактную сводку по одному запуску пайплайна.
 
     Args:
+        mode: Режим запуска пайплайна (real/demo/test/dataset).
         model_type: Идентификатор модели ("rf"/"xgb"/...).
         total_alerts: Общее число записей в result.alerts.
         new_alerts: Число сохранённых алертов (где alert == 1).
@@ -378,11 +462,13 @@ def notify_pipeline_summary(
     """
     top_str = ", ".join([f"{html.escape(str(t))}: {int(c)}" for t, c in top_types]) if top_types else "—"
     max_str = f"{float(max_probability):.1%}" if max_probability is not None else "—"
+    mode_safe = html.escape(str(mode))
     model_safe = html.escape(str(model_type))
 
     msg = textwrap.dedent(
         f"""\
         <b>PreVisor: сводка запуска</b>
+        Режим: <code>{mode_safe}</code>
         Модель: <code>{model_safe}</code>
         Всего записей: <b>{int(total_alerts)}</b>
         Новых алертов: <b>{int(new_alerts)}</b>

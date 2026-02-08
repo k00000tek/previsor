@@ -49,11 +49,30 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _env_int(name: str, default: int) -> int:
+    """Читает int из переменной окружения (с безопасным fallback).
+
+    Args:
+        name: Имя переменной окружения.
+        default: Значение по умолчанию.
+
+    Returns:
+        Значение int.
+    """
+    raw = os.getenv(name)
+    if raw is None:
+        return int(default)
+    try:
+        return int(raw)
+    except Exception:
+        return int(default)
+
+
 @dataclass
 class RiskPolicy:
     """Политика формирования риска/алерта по выходам классификатора и TI.
 
-    Attributes:
+    Атрибуты:
         precheck: Порог, при котором допустимо делать дорогую проверку TI (репутация IP).
         alert_threshold: Порог итогового риска для формирования алерта по классификатору.
         enable_ti: Разрешить ли TI-обогащение (AbuseIPDB и т.п.).
@@ -121,7 +140,10 @@ class Analyzer:
         logger.info("Запуск обучения модели: %s", self.model_type.upper())
 
         if self.model_type == "rf":
-            self.model = RandomForestClassifier(n_estimators=200, random_state=42, n_jobs=-1)
+            # На Windows в некоторых окружениях параллельность sklearn/joblib может упираться в ACL/IPC.
+            # Делаем n_jobs управляемым через env.
+            n_jobs = _env_int("PREVISOR_SKLEARN_N_JOBS", 1)
+            self.model = RandomForestClassifier(n_estimators=200, random_state=42, n_jobs=int(n_jobs))
         else:
             if XGBClassifier is None:
                 raise RuntimeError("xgboost не установлен в окружении, невозможно обучить XGB.")
@@ -234,6 +256,7 @@ class Analyzer:
                 "probability": float(risk_score),
                 "timestamp": datetime.now().isoformat(),
                 "source_ip": ip,
+                "row_index": int(i),
             }
             alerts.append(alert)
 

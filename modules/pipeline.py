@@ -22,12 +22,6 @@ from modules.preprocessor import preprocess_data
 from modules.analyzer import Analyzer
 from modules.anomaly_detector import detect_anomalies
 from modules.heuristics import detect_heuristic_alerts
-from modules.baseline_manager import (
-    BaselinePolicy,
-    append_baseline,
-    count_baseline_rows,
-    maybe_train_anomaly_model,
-)
 from modules.database import save_traffic_logs
 
 logger = logging.getLogger(__name__)
@@ -39,7 +33,7 @@ if not logging.getLogger().handlers:
 class PipelineResult:
     """Результат выполнения пайплайна.
 
-    Attributes:
+    Атрибуты:
         processed_df: Обработанный DataFrame (после очистки/кодирования/масштабирования).
         X: Матрица признаков, подаваемая на модели.
         alerts: Список алертов в унифицированном формате.
@@ -104,6 +98,7 @@ class PreVisorPipeline:
         #   - ANOMALY_ENABLED=1 (или PREVISOR_ANOMALY_ENABLED=1)
         #   - baseline-модель IsolationForest существует
         self.enable_anomalies = self._should_enable_anomalies(enable_anomalies)
+        self._requested_anomalies = bool(enable_anomalies)
 
         if anomaly_strategy is None or not str(anomaly_strategy).strip():
             anomaly_strategy = os.getenv("PREVISOR_ANOMALY_STRATEGY", "baseline")
@@ -177,12 +172,36 @@ class PreVisorPipeline:
         if mode not in {"real", "demo", "test", "dataset"}:
             raise ValueError(f"Неизвестный режим mode={mode!r}. Ожидается: real/demo/test/dataset")
 
+        # Модель аномалий может появиться после запуска приложения (auto-train),
+        # поэтому проверяем возможность включения anomaly_detector на каждом прогоне.
+        if self._requested_anomalies and not self.enable_anomalies:
+            self.enable_anomalies = self._should_enable_anomalies(True)
+
         collect_params = dict(collect_params or {})
         preprocess_params = dict(preprocess_params or {})
 
         # Защита от конфликтов аргументов: mode/save_csv задаёт сам pipeline.
         collect_params.pop("mode", None)
         collect_params.pop("save_csv", None)
+
+        # Для real-режима явно прокидываем параметры захвата, чтобы учитывать env/runtime-настройки.
+        if mode == "real":
+            collect_params.setdefault(
+                "iface",
+                os.getenv("PREVISOR_NET_IFACE", getattr(cfg, "NETWORK_INTERFACE", "auto")),
+            )
+            collect_params.setdefault(
+                "num_packets",
+                int(os.getenv("PREVISOR_PACKET_COUNT", str(getattr(cfg, "PACKET_COUNT_PER_COLLECTION", 200)))),
+            )
+            collect_params.setdefault(
+                "timeout_sec",
+                int(os.getenv("PREVISOR_PACKET_TIMEOUT", str(getattr(cfg, "PACKET_SNIFF_TIMEOUT_SEC", 30)))),
+            )
+            collect_params.setdefault(
+                "bpf_filter",
+                os.getenv("PREVISOR_BPF_FILTER", getattr(cfg, "BPF_FILTER", "")),
+            )
 
         # На уровне пайплайна фиксируем инференс-предобработку.
         preprocess_params["purpose"] = "inference"
@@ -205,9 +224,12 @@ class PreVisorPipeline:
         source_ips = processed_df["source_ip"].tolist() if "source_ip" in processed_df.columns else None
 
         # 2a) Логирование трафика (сырые строки)
+        traffic_log_ids: Optional[List[int]] = None
         if self.enable_traffic_logs and raw_df is not None:
             try:
-                save_traffic_logs(raw_df, mode=mode)
+                ids = save_traffic_logs(raw_df, mode=mode, return_ids=True)
+                if isinstance(ids, list):
+                    traffic_log_ids = ids
             except Exception:
                 logger.exception("Не удалось сохранить traffic_logs")
 
@@ -222,7 +244,7 @@ class PreVisorPipeline:
         # 4) Классификация (RF/XGB)
         if self.enable_classifier:
             class_alerts = self.analyzer.analyze(X, source_ips=source_ips)
-            alerts.extend(self._normalize_class_alerts(class_alerts))
+            alerts.extend(self._normalize_class_alerts(class_alerts, traffic_log_ids=traffic_log_ids))
 
         # 4a) Эвристики (DDoS/port-scan/HTTP)
         if self.enable_heuristics and raw_df is not None:
@@ -231,39 +253,14 @@ class PreVisorPipeline:
                 and os.getenv("PREVISOR_HEURISTICS_REQUIRE_PRIVATE_TARGET", "true").strip().lower()
                 in {"1", "true", "yes", "y", "on"}
             )
-            require_private_source = (
-                mode == "real"
-                and os.getenv("PREVISOR_HEURISTICS_REQUIRE_PRIVATE_SOURCE", "true").strip().lower()
-                in {"1", "true", "yes", "y", "on"}
-            )
             try:
                 heur_alerts = detect_heuristic_alerts(
                     raw_df,
                     require_private_target=require_private_target,
-                    require_private_source=require_private_source,
                 )
-                alerts.extend(self._normalize_heur_alerts(heur_alerts))
+                alerts.extend(self._normalize_heur_alerts(heur_alerts, traffic_log_ids=traffic_log_ids))
             except Exception:
                 logger.exception("Ошибка эвристического детектора")
-        # 4b) Auto baseline + retrain anomaly model (real mode only)
-        if mode == "real" and raw_df is not None:
-            policy = BaselinePolicy()
-            if policy.auto_enabled:
-                baseline_path = getattr(cfg, "BASELINE_TRAFFIC_CSV", None)
-                if baseline_path:
-                    current_rows = count_baseline_rows(baseline_path)
-                    if current_rows < policy.min_rows:
-                        append_baseline(raw_df, path=baseline_path)
-                        current_rows = count_baseline_rows(baseline_path)
-                        logger.info("Baseline rows: %s / %s", current_rows, policy.min_rows)
-
-                    if current_rows >= policy.min_rows:
-                        trained = maybe_train_anomaly_model(
-                            baseline_csv=baseline_path,
-                            feature_schema_path=self.feature_schema_path,
-                        )
-                        if trained:
-                            self.enable_anomalies = self._should_enable_anomalies(True)
 
         # 5) Аномалии (IsolationForest)
         if self.enable_anomalies:
@@ -276,7 +273,7 @@ class PreVisorPipeline:
                 max_alerts=self.max_anomaly_alerts,
                 require_pred_minus1=True,
             )
-            alerts.extend(self._normalize_anom_alerts(anom_alerts))
+            alerts.extend(self._normalize_anom_alerts(anom_alerts, traffic_log_ids=traffic_log_ids))
 
         return PipelineResult(processed_df=processed_df, X=X, alerts=alerts)
 
@@ -344,10 +341,30 @@ class PreVisorPipeline:
         """Устойчиво извлекает тип алерта из разных форматов."""
         return str(a.get("alert_type") or a.get("type") or "Unknown")
 
-    def _normalize_class_alerts(self, alerts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Приводит алерты классификатора к единому формату."""
+    def _normalize_class_alerts(
+        self,
+        alerts: List[Dict[str, Any]],
+        *,
+        traffic_log_ids: Optional[List[int]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Приводит алерты классификатора к единому формату.
+
+        Args:
+            alerts: Алерты классификатора.
+            traffic_log_ids: Список ID из таблицы traffic_logs, параллельный raw_df.
+
+        Returns:
+            Список алертов в унифицированном формате.
+        """
         norm: List[Dict[str, Any]] = []
         for a in alerts:
+            row_index = a.get("row_index")
+            traffic_log_id = None
+            if traffic_log_ids is not None and row_index is not None:
+                try:
+                    traffic_log_id = traffic_log_ids[int(row_index)]
+                except Exception:
+                    traffic_log_id = None
             norm.append(
                 {
                     "alert": int(a.get("alert", 0)),
@@ -358,14 +375,35 @@ class PreVisorPipeline:
                     "timestamp": a.get("timestamp"),
                     "source_ip": a.get("source_ip"),
                     "detection_source": "classifier",
+                    "traffic_log_id": traffic_log_id,
                 }
             )
         return norm
 
-    def _normalize_anom_alerts(self, alerts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Приводит алерты детектора аномалий к единому формату."""
+    def _normalize_anom_alerts(
+        self,
+        alerts: List[Dict[str, Any]],
+        *,
+        traffic_log_ids: Optional[List[int]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Приводит алерты детектора аномалий к единому формату.
+
+        Args:
+            alerts: Алерты детектора аномалий.
+            traffic_log_ids: Список ID из таблицы traffic_logs, параллельный raw_df.
+
+        Returns:
+            Список алертов в унифицированном формате.
+        """
         norm: List[Dict[str, Any]] = []
         for a in alerts:
+            row_index = a.get("row_index")
+            traffic_log_id = None
+            if traffic_log_ids is not None and row_index is not None:
+                try:
+                    traffic_log_id = traffic_log_ids[int(row_index)]
+                except Exception:
+                    traffic_log_id = None
             norm.append(
                 {
                     "alert": int(a.get("alert", 0)),
@@ -376,14 +414,35 @@ class PreVisorPipeline:
                     "timestamp": a.get("timestamp"),
                     "source_ip": a.get("source_ip"),
                     "detection_source": "anomaly_detector",
+                    "traffic_log_id": traffic_log_id,
                 }
             )
         return norm
 
-    def _normalize_heur_alerts(self, alerts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Приводит алерты эвристик к единому формату."""
+    def _normalize_heur_alerts(
+        self,
+        alerts: List[Dict[str, Any]],
+        *,
+        traffic_log_ids: Optional[List[int]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Приводит алерты эвристик к единому формату.
+
+        Args:
+            alerts: Алерты эвристик.
+            traffic_log_ids: Список ID из таблицы traffic_logs, параллельный raw_df.
+
+        Returns:
+            Список алертов в унифицированном формате.
+        """
         norm: List[Dict[str, Any]] = []
         for a in alerts:
+            row_index = a.get("row_index")
+            traffic_log_id = None
+            if traffic_log_ids is not None and row_index is not None:
+                try:
+                    traffic_log_id = traffic_log_ids[int(row_index)]
+                except Exception:
+                    traffic_log_id = None
             norm.append(
                 {
                     "alert": int(a.get("alert", 0)),
@@ -395,6 +454,7 @@ class PreVisorPipeline:
                     "source_ip": a.get("source_ip"),
                     "detection_source": a.get("detection_source") or "heuristics",
                     "details": a.get("details"),
+                    "traffic_log_id": traffic_log_id,
                 }
             )
         return norm

@@ -4,7 +4,6 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-from typing import Optional
 
 import joblib
 import pandas as pd
@@ -15,8 +14,10 @@ from modules.anomaly_detector import (
     AnomalyPolicy,
     compute_anomaly_stats,
     save_anomaly_stats,
+    load_anomaly_stats,
 )
 from modules.preprocessor import preprocess_data
+from modules.database import count_baseline_candidates, load_baseline_candidates_df
 
 logger = logging.getLogger(__name__)
 if not logging.getLogger().handlers:
@@ -58,24 +59,6 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-def _count_csv_rows(path: str) -> int:
-    """Считает количество строк (без заголовка) в CSV.
-
-    Args:
-        path: Путь к CSV.
-
-    Returns:
-        Количество строк.
-    """
-    if not os.path.exists(path):
-        return 0
-    try:
-        with open(path, "rb") as fh:
-            return max(0, sum(1 for _ in fh) - 1)
-    except Exception:
-        return 0
-
-
 def _align_features(X: pd.DataFrame, feature_schema_path: str) -> pd.DataFrame:
     """Выравнивает матрицу признаков по схеме обучения.
 
@@ -115,47 +98,37 @@ class BaselinePolicy:
     min_rows: int = _env_int("PREVISOR_BASELINE_TARGET_ROWS", 5000)
     anomaly_auto_train: bool = _env_bool("PREVISOR_ANOMALY_AUTO_TRAIN", True)
     anomaly_retrain_hours: int = _env_int("PREVISOR_ANOMALY_RETRAIN_HOURS", 24)
+    anomaly_retrain_rows: int = _env_int(
+        "PREVISOR_ANOMALY_RETRAIN_ROWS",
+        int(getattr(cfg, "PREVISOR_ANOMALY_RETRAIN_ROWS", 5000)),
+    )
 
 
-def count_baseline_rows(path: str) -> int:
-    """Возвращает количество строк baseline CSV.
+def count_baseline_rows(*, mode: str = "real") -> int:
+    """Возвращает размер baseline-пула в БД (traffic_logs).
+
+    Baseline формируется из traffic_logs (обычно mode="real").
+    В пул входят записи, у которых нет связанных алертов со статусом, отличным от false_positive.
 
     Args:
-        path: Путь к baseline CSV.
+        mode: Фильтр по traffic_logs.mode.
 
     Returns:
-        Количество строк.
+        Количество baseline-кандидатов.
     """
-    return _count_csv_rows(path)
+    return int(count_baseline_candidates(mode=mode))
 
 
-def append_baseline(df: pd.DataFrame, *, path: Optional[str] = None) -> int:
-    """Добавляет строки в baseline CSV.
+def maybe_train_anomaly_model_from_db(*, feature_schema_path: str, mode: str = "real") -> bool:
+    """Переобучает IsolationForest при выполнении условий (baseline из БД).
+
+    Источник baseline:
+        таблица traffic_logs (фильтр по mode) за вычетом записей,
+        связанных с алертами (кроме false_positive).
 
     Args:
-        df: DataFrame с трафиком.
-        path: Путь к baseline CSV.
-
-    Returns:
-        Число добавленных строк.
-    """
-    if df is None or df.empty:
-        return 0
-
-    path = path or getattr(cfg, "BASELINE_TRAFFIC_CSV", os.path.join(cfg.DATA_RUNTIME_DIR, "baseline_traffic.csv"))
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-
-    file_exists = os.path.exists(path) and os.path.getsize(path) > 0
-    df.to_csv(path, mode="a", header=not file_exists, index=False)
-    return len(df)
-
-
-def maybe_train_anomaly_model(*, baseline_csv: str, feature_schema_path: str) -> bool:
-    """Переобучает IsolationForest при выполнении условий.
-
-    Args:
-        baseline_csv: Путь к baseline CSV.
         feature_schema_path: Путь к feature schema.
+        mode: Режим baseline-пула (обычно "real").
 
     Returns:
         True, если модель была переобучена.
@@ -164,19 +137,34 @@ def maybe_train_anomaly_model(*, baseline_csv: str, feature_schema_path: str) ->
     if not policy.anomaly_auto_train:
         return False
 
-    if not os.path.exists(baseline_csv):
-        return False
-
-    if _count_csv_rows(baseline_csv) < policy.min_rows:
+    current_rows = int(count_baseline_candidates(mode=mode))
+    if current_rows < policy.min_rows:
         return False
 
     model_path = getattr(cfg, "IFOREST_MODEL_PATH", os.path.join(cfg.MODELS_RUNTIME_DIR, "isolation_forest.pkl"))
     if os.path.exists(model_path):
         mtime = os.path.getmtime(model_path)
-        if (time.time() - mtime) < (policy.anomaly_retrain_hours * 3600):
+        too_soon = (time.time() - mtime) < (policy.anomaly_retrain_hours * 3600)
+
+        # Доп. условие: ретренинг по приросту baseline строк
+        stats_path = getattr(cfg, "IFOREST_STATS_PATH", None)
+        stats = load_anomaly_stats(stats_path, getattr(cfg, "IFOREST_STATS_PRETRAINED_PATH", None))
+        prev_rows = None
+        if isinstance(stats, dict):
+            prev_rows = stats.get("baseline_rows")
+            if prev_rows is None:
+                prev_rows = stats.get("rows")
+        enough_new_rows = False
+        if prev_rows is not None and policy.anomaly_retrain_rows > 0:
+            try:
+                enough_new_rows = (current_rows - int(prev_rows)) >= policy.anomaly_retrain_rows
+            except Exception:
+                enough_new_rows = False
+
+        if too_soon and not enough_new_rows:
             return False
 
-    df = pd.read_csv(baseline_csv)
+    df = load_baseline_candidates_df(mode=mode, limit=None)
     if df.empty:
         return False
 
@@ -191,7 +179,12 @@ def maybe_train_anomaly_model(*, baseline_csv: str, feature_schema_path: str) ->
     stats_path = getattr(cfg, "IFOREST_STATS_PATH", None)
     if stats_path:
         policy_stats = AnomalyPolicy()
-        stats = compute_anomaly_stats(X, model=det.model, quantiles=policy_stats.baseline_quantiles)
+        stats = compute_anomaly_stats(
+            X,
+            model=det.model,
+            quantiles=policy_stats.baseline_quantiles,
+            baseline_rows=current_rows,
+        )
         save_anomaly_stats(stats, stats_path)
-    logger.info("IsolationForest auto-trained on baseline: %s", model_path)
+    logger.info("IsolationForest auto-trained on baseline from DB: %s", model_path)
     return True

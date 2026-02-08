@@ -7,11 +7,10 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 import requests
-from dotenv import load_dotenv
 
 from modules.database import get_ip_reputation, upsert_ip_reputation
 
-load_dotenv()
+import config as cfg
 
 logger = logging.getLogger(__name__)
 if not logging.getLogger().handlers:
@@ -22,7 +21,7 @@ if not logging.getLogger().handlers:
 # Конфиг
 # -----------------------------
 
-ABUSEIPDB_KEY = os.getenv("ABUSEIPDB_KEY", "").strip()
+ABUSEIPDB_KEY = (os.getenv("ABUSEIPDB_KEY") or getattr(cfg, "ABUSEIPDB_KEY", "")).strip()
 CACHE_DAYS = int(os.getenv("PREVISOR_TI_CACHE_DAYS", "7"))
 
 ABUSEIPDB_URL = "https://api.abuseipdb.com/api/v2/check"

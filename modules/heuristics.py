@@ -177,11 +177,10 @@ def detect_heuristic_alerts(
     df: pd.DataFrame,
     *,
     require_private_target: bool = False,
-    require_private_source: bool = False,
 ) -> List[Dict[str, Any]]:
-    """Heuristic detections for DDoS/port scanning/suspicious ports/HTTP anomalies.
+    """Ищет угрозы эвристиками (DDoS/port scanning/подозрительные порты/HTTP-паттерны).
 
-    This works on raw traffic rows (pre-preprocessing), so it is resilient to dataset variety.
+    Детектор работает по сырым строкам трафика (до предобработки), поэтому устойчив к вариативности датасетов.
     """
     policy = HeuristicPolicy()
     if not policy.enabled:
@@ -206,15 +205,6 @@ def detect_heuristic_alerts(
         if df.empty:
             return []
 
-    if require_private_source:
-        if not source_col:
-            logger.debug("Heuristics skipped: source_ip missing for private-source mode")
-            return []
-        mask = df[source_col].astype(str).map(_is_private_ip)
-        df = df[mask]
-        if df.empty:
-            return []
-
     # Port scanning: many unique dest ports from one source in a batch.
     if source_col and dest_port_col:
         grouped = df.groupby(source_col)[dest_port_col].agg(["nunique", "count"])
@@ -223,6 +213,11 @@ def detect_heuristic_alerts(
             & (grouped["count"] >= policy.portscan_min_total_packets)
         ]
         for src_ip, row in offenders.iterrows():
+            row_index = None
+            try:
+                row_index = int(df[df[source_col] == src_ip].index[0])
+            except Exception:
+                row_index = None
             alerts.append(
                 {
                     "alert": 1,
@@ -235,6 +230,7 @@ def detect_heuristic_alerts(
                     },
                     "timestamp": now,
                     "detection_source": "heuristics",
+                    "row_index": row_index,
                 }
             )
 
@@ -247,6 +243,11 @@ def detect_heuristic_alerts(
             & (grouped["count"] >= policy.ddos_min_total_packets)
         ]
         for target, row in offenders.iterrows():
+            row_index = None
+            try:
+                row_index = int(df[df[target_col] == target].index[0])
+            except Exception:
+                row_index = None
             alerts.append(
                 {
                     "alert": 1,
@@ -260,6 +261,7 @@ def detect_heuristic_alerts(
                     },
                     "timestamp": now,
                     "detection_source": "heuristics",
+                    "row_index": row_index,
                 }
             )
 
@@ -271,6 +273,16 @@ def detect_heuristic_alerts(
                 grouped = port_hits.groupby([source_col, dest_port_col]).size()
                 for (src_ip, port), count in grouped.items():
                     if int(count) >= policy.suspicious_port_min_hits:
+                        row_index = None
+                        try:
+                            row_index = int(
+                                port_hits[
+                                    (port_hits[source_col] == src_ip)
+                                    & (port_hits[dest_port_col] == port)
+                                ].index[0]
+                            )
+                        except Exception:
+                            row_index = None
                         alerts.append(
                             {
                                 "alert": 1,
@@ -280,12 +292,18 @@ def detect_heuristic_alerts(
                                 "details": {"dest_port": int(port), "hits": int(count)},
                                 "timestamp": now,
                                 "detection_source": "heuristics",
+                                "row_index": row_index,
                             }
                         )
             else:
                 grouped = port_hits.groupby(dest_port_col).size()
                 for port, count in grouped.items():
                     if int(count) >= policy.suspicious_port_min_hits:
+                        row_index = None
+                        try:
+                            row_index = int(port_hits[port_hits[dest_port_col] == port].index[0])
+                        except Exception:
+                            row_index = None
                         alerts.append(
                             {
                                 "alert": 1,
@@ -295,6 +313,7 @@ def detect_heuristic_alerts(
                                 "details": {"dest_port": int(port), "hits": int(count)},
                                 "timestamp": now,
                                 "detection_source": "heuristics",
+                                "row_index": row_index,
                             }
                         )
 
@@ -305,7 +324,7 @@ def detect_heuristic_alerts(
         if c.lower() in {"url", "content", "host", "user-agent", "user_agent", "useragent"}
     ]
     if http_cols:
-        for _, row in df.iterrows():
+        for idx, row in df.iterrows():
             payload = _safe_iter_text(row, http_cols)
             if not payload:
                 continue
@@ -319,6 +338,7 @@ def detect_heuristic_alerts(
                         "details": {"columns": http_cols},
                         "timestamp": now,
                         "detection_source": "heuristics",
+                        "row_index": int(idx) if isinstance(idx, int) else None,
                     }
                 )
 
