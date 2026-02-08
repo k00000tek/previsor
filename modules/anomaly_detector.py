@@ -1,16 +1,18 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
-from dataclasses import dataclass
-from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple, Union
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
 import joblib
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import IsolationForest
 
+import config as cfg
 from config import IFOREST_MODEL_PATH
 
 logger = logging.getLogger(__name__)
@@ -40,11 +42,44 @@ def _env_int(name: str, default: int) -> int:
         return int(default)
 
 
+def _env_csv_floats(name: str, default: Iterable[float]) -> List[float]:
+    """Reads a CSV list of floats from env."""
+    raw = os.getenv(name)
+    if not raw:
+        return list(default)
+    out: List[float] = []
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            out.append(float(part))
+        except Exception:
+            continue
+    return out or list(default)
+
+
+def _csv_floats(raw: Optional[str], default: Iterable[float]) -> List[float]:
+    """Разбирает CSV-строку с float значениями в список."""
+    if not raw:
+        return list(default)
+    out: List[float] = []
+    for part in str(raw).split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            out.append(float(part))
+        except Exception:
+            continue
+    return out or list(default)
+
+
 @dataclass
 class AnomalyPolicy:
     """Политика детекции аномалий.
 
-    Attributes:
+    Атрибуты:
         contamination: Доля аномалий для IsolationForest (грубая априорная оценка).
         quantile: Квантиль anomaly_score для отбора (например 0.99 = топ-1%).
         max_alerts: Максимум алертов-анoмалий за прогон.
@@ -56,7 +91,22 @@ class AnomalyPolicy:
     quantile: float = _env_float("PREVISOR_ANOMALY_QUANTILE", 0.99)
     max_alerts: int = _env_int("PREVISOR_ANOMALY_MAX_ALERTS", 50)
     require_pred_minus1: bool = os.getenv("PREVISOR_ANOMALY_REQUIRE_MINUS1", "true").strip().lower() in {"1", "true", "yes", "y", "on"}
-    decision_threshold: float = _env_float("PREVISOR_ANOMALY_DECISION_THRESHOLD", -0.1)
+    decision_threshold: float = _env_float(
+        "PREVISOR_ANOMALY_DECISION_THRESHOLD",
+        float(getattr(cfg, "PREVISOR_ANOMALY_DECISION_THRESHOLD", 0.0)),
+    )
+    strategy: str = os.getenv("PREVISOR_ANOMALY_STRATEGY", "baseline").strip().lower()
+    baseline_quantile: float = _env_float(
+        "PREVISOR_ANOMALY_BASELINE_QUANTILE",
+        float(getattr(cfg, "PREVISOR_ANOMALY_BASELINE_QUANTILE", 0.999)),
+    )
+    baseline_quantiles: List[float] = field(default_factory=lambda: _env_csv_floats(
+        "PREVISOR_ANOMALY_BASELINE_QUANTILES",
+        default=_csv_floats(
+            getattr(cfg, "PREVISOR_ANOMALY_BASELINE_QUANTILES", None),
+            default=[0.95, 0.99, 0.995, 0.999],
+        ),
+    ))
 
 
 class AnomalyDetector:
@@ -79,6 +129,7 @@ class AnomalyDetector:
         contamination: Optional[float] = None,
         random_state: int = 42,
         model_path: str = IFOREST_MODEL_PATH,
+        fallback_path: Optional[str] = None,
     ) -> None:
         """Инициализирует IsolationForest детектор.
 
@@ -88,6 +139,7 @@ class AnomalyDetector:
             model_path: Путь к модели.
         """
         self.model_path = model_path
+        self.fallback_path = fallback_path
 
         if contamination is None:
             contamination = _env_float("PREVISOR_ANOMALY_CONTAMINATION", 0.02)
@@ -96,7 +148,7 @@ class AnomalyDetector:
             contamination=float(contamination),
             random_state=int(random_state),
             n_estimators=200,
-            n_jobs=-1,
+            n_jobs=int(_env_int("PREVISOR_SKLEARN_N_JOBS", 1)),
         )
 
     def fit(self, X: Union[pd.DataFrame, np.ndarray]) -> None:
@@ -119,6 +171,9 @@ class AnomalyDetector:
         if os.path.exists(self.model_path):
             self.model = joblib.load(self.model_path)
             return True
+        if self.fallback_path and os.path.exists(self.fallback_path):
+            self.model = joblib.load(self.fallback_path)
+            return True
         return False
 
     def predict(self, X: Union[pd.DataFrame, np.ndarray]) -> Tuple[np.ndarray, np.ndarray]:
@@ -136,6 +191,146 @@ class AnomalyDetector:
         return preds, decision
 
 
+def _normalize_quantiles(values: Iterable[float]) -> List[float]:
+    """Нормализует список квантилей и приводит его к уникальному отсортированному виду.
+
+    Args:
+        values: Итерируемый набор квантилей.
+
+    Returns:
+        Отсортированный список уникальных квантилей в диапазоне 0.5..0.9999.
+    """
+    out: List[float] = []
+    for raw in values:
+        try:
+            q = float(raw)
+        except Exception:
+            continue
+        q = min(max(q, 0.5), 0.9999)
+        out.append(q)
+    if not out:
+        return []
+    out = sorted(set(out))
+    return out
+
+
+def compute_anomaly_stats(
+    X: Union[pd.DataFrame, np.ndarray],
+    *,
+    model: IsolationForest,
+    quantiles: Iterable[float],
+    baseline_rows: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Считает статистику anomaly_score для baseline (для порогов и нормировки).
+
+    Args:
+        X: Матрица признаков (после предобработки).
+        model: Обученная модель IsolationForest.
+        quantiles: Квантили anomaly_score, которые нужно посчитать.
+        baseline_rows: Число строк в baseline CSV (до предобработки), если известно.
+
+    Returns:
+        Словарь со статистикой и квантилями anomaly_score.
+    """
+    decision = model.decision_function(X)
+    score = -decision.astype(float)
+    quantiles = _normalize_quantiles(quantiles)
+    q_map = {str(q): float(np.quantile(score, q)) for q in quantiles}
+    out: Dict[str, Any] = {
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "rows": int(len(score)),
+        "score_min": float(np.min(score)) if len(score) else 0.0,
+        "score_max": float(np.max(score)) if len(score) else 0.0,
+        "score_mean": float(np.mean(score)) if len(score) else 0.0,
+        "score_std": float(np.std(score)) if len(score) else 0.0,
+        "quantiles": q_map,
+    }
+    if baseline_rows is not None:
+        out["baseline_rows"] = int(baseline_rows)
+    return out
+
+
+def save_anomaly_stats(stats: Dict[str, Any], path: str) -> bool:
+    """Сохраняет статистику baseline детектора в JSON."""
+    if not path:
+        return False
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    try:
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(stats, fh, ensure_ascii=False, indent=2)
+        logger.info("IsolationForest stats saved: %s", path)
+        return True
+    except Exception as exc:
+        logger.warning("Failed to save IsolationForest stats (%s): %s", path, exc)
+        return False
+
+
+def load_anomaly_stats(path: Optional[str], fallback_path: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Загружает статистику baseline детектора из JSON."""
+    for candidate in (path, fallback_path):
+        if not candidate or not os.path.exists(candidate):
+            continue
+        try:
+            with open(candidate, "r", encoding="utf-8") as fh:
+                return json.load(fh)
+        except Exception as exc:
+            logger.warning("Failed to load IsolationForest stats (%s): %s", candidate, exc)
+            return None
+    return None
+
+
+def _select_stats_threshold(stats: Dict[str, Any], target_q: float) -> Optional[float]:
+    """Выбирает порог anomaly_score из baseline-статистики по ближайшему квантилю.
+
+    Args:
+        stats: Статистика baseline (compute_anomaly_stats).
+        target_q: Целевой квантиль (например 0.999).
+
+    Returns:
+        Значение порога anomaly_score или None, если порог извлечь не удалось.
+    """
+    quantiles = stats.get("quantiles") or {}
+    parsed: List[Tuple[float, float]] = []
+    for key, value in quantiles.items():
+        try:
+            parsed.append((float(key), float(value)))
+        except Exception:
+            continue
+    if parsed:
+        parsed.sort(key=lambda item: abs(item[0] - target_q))
+        return float(parsed[0][1])
+    score_max = stats.get("score_max")
+    return float(score_max) if score_max is not None else None
+
+
+def _normalize_scores(scores: np.ndarray, stats: Optional[Dict[str, Any]]) -> np.ndarray:
+    """Нормирует anomaly_score в диапазон 0..1.
+
+    Если доступна baseline-статистика (score_min/score_max), нормировка выполняется по ней,
+    иначе — по min/max текущего батча.
+
+    Args:
+        scores: Массив anomaly_score.
+        stats: Baseline-статистика (опционально).
+
+    Returns:
+        Массив нормированных значений 0..1.
+    """
+    if stats and isinstance(stats, dict):
+        s_min = stats.get("score_min")
+        s_max = stats.get("score_max")
+        if s_min is not None and s_max is not None:
+            s_min = float(s_min)
+            s_max = float(s_max)
+            if s_max > s_min:
+                return np.clip((scores - s_min) / (s_max - s_min), 0.0, 1.0)
+    s_min = float(np.min(scores))
+    s_max = float(np.max(scores))
+    if s_max > s_min:
+        return (scores - s_min) / (s_max - s_min)
+    return np.zeros_like(scores)
+
+
 def detect_anomalies(
     X: Union[pd.DataFrame, np.ndarray],
     *,
@@ -143,7 +338,7 @@ def detect_anomalies(
     # Старый режим: если threshold задан, используем (pred=-1 AND decision < threshold)
     threshold: Optional[float] = None,
     # Новый режим по умолчанию: выбираем аномалии по квантилю аномальности
-    strategy: str = "quantile",  # "quantile" | "threshold"
+    strategy: str = "baseline",  # "baseline" | "quantile" | "threshold"
     quantile: float = 0.99,
     max_alerts: int = 50,
     require_pred_minus1: bool = True,
@@ -181,8 +376,15 @@ def detect_anomalies(
         quantile = policy.quantile
     if require_pred_minus1 is True:
         require_pred_minus1 = policy.require_pred_minus1
+    if not strategy:
+        strategy = policy.strategy
+    strategy = str(strategy).strip().lower()
 
-    det = AnomalyDetector(contamination=policy.contamination, model_path=IFOREST_MODEL_PATH)
+    det = AnomalyDetector(
+        contamination=policy.contamination,
+        model_path=IFOREST_MODEL_PATH,
+        fallback_path=cfg.IFOREST_PRETRAINED_PATH,
+    )
 
     if not det.load():
         if bootstrap_if_missing:
@@ -209,16 +411,24 @@ def detect_anomalies(
     # anomaly_score: больше = аномальнее
     anomaly_score = -decision.astype(float)
 
-    # Нормировка в 0..1 на текущем батче
-    s_min = float(np.min(anomaly_score))
-    s_max = float(np.max(anomaly_score))
-    if s_max > s_min:
-        norm = (anomaly_score - s_min) / (s_max - s_min)
-    else:
-        norm = np.zeros_like(anomaly_score)
+    baseline_stats: Optional[Dict[str, Any]] = None
+    threshold_score: Optional[float] = None
 
     # Выбор индексов-кандидатов
-    if threshold is not None or strategy == "threshold":
+    if strategy == "baseline":
+        baseline_stats = load_anomaly_stats(
+            getattr(cfg, "IFOREST_STATS_PATH", None),
+            getattr(cfg, "IFOREST_STATS_PRETRAINED_PATH", None),
+        )
+        if baseline_stats:
+            baseline_q = float(policy.baseline_quantile)
+            baseline_q = min(max(baseline_q, 0.5), 0.9999)
+            threshold_score = _select_stats_threshold(baseline_stats, baseline_q)
+        if threshold_score is not None:
+            mask = anomaly_score >= threshold_score
+        else:
+            mask = preds == -1
+    elif threshold is not None or strategy == "threshold":
         thr = float(threshold) if threshold is not None else float(policy.decision_threshold)
         mask = decision < thr
     else:
@@ -226,6 +436,8 @@ def detect_anomalies(
         q = min(max(q, 0.5), 0.9999)
         thr_score = float(np.quantile(anomaly_score, q))
         mask = anomaly_score >= thr_score
+
+    norm = _normalize_scores(anomaly_score, baseline_stats if strategy == "baseline" else None)
 
     if require_pred_minus1:
         mask = mask & (preds == -1)
@@ -239,18 +451,31 @@ def detect_anomalies(
     if max_alerts > 0:
         idx = idx[:max_alerts]
 
+    score_cap: Optional[float] = None
+    if threshold_score is not None and baseline_stats:
+        try:
+            score_cap = float(baseline_stats.get("score_max"))
+        except Exception:
+            score_cap = None
+
     alerts: List[Dict[str, Any]] = []
     now = datetime.now().isoformat()
 
     for i in idx:
         ip = source_ips[i] if source_ips and i < len(source_ips) else None
+        if threshold_score is not None and score_cap is not None and score_cap > threshold_score:
+            prob = (float(anomaly_score[i]) - float(threshold_score)) / (score_cap - float(threshold_score))
+            prob = float(np.clip(prob, 0.0, 1.0))
+        else:
+            prob = float(norm[i])
         alerts.append(
             {
                 "alert": 1,
                 "type": "Anomaly",
-                "probability": float(norm[i]),  # 0..1
+                "probability": prob,  # 0..1
                 "timestamp": now,
                 "source_ip": ip,
+                "row_index": int(i),
             }
         )
 

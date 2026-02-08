@@ -16,7 +16,12 @@ if str(PROJECT_ROOT) not in sys.path:
 # -------------------------------------------------------------------------------
 
 import config as cfg
-from modules.anomaly_detector import AnomalyDetector
+from modules.anomaly_detector import (
+    AnomalyDetector,
+    AnomalyPolicy,
+    compute_anomaly_stats,
+    save_anomaly_stats,
+)
 from modules.preprocessor import preprocess_data
 
 logger = logging.getLogger(__name__)
@@ -98,6 +103,10 @@ def main() -> int:
 
     det = AnomalyDetector(model_path=getattr(cfg, "IFOREST_MODEL_PATH", os.path.join(cfg.MODELS_RUNTIME_DIR, "isolation_forest.pkl")))
     det.fit(X)
+    stats_path = getattr(cfg, "IFOREST_STATS_PATH", os.path.join(cfg.MODELS_RUNTIME_DIR, "isolation_forest_stats.json"))
+    policy_stats = AnomalyPolicy()
+    stats = compute_anomaly_stats(X, model=det.model, quantiles=policy_stats.baseline_quantiles)
+    save_anomaly_stats(stats, stats_path)
 
     logger.info("Baseline IsolationForest сохранён: %s", det.model_path)
     logger.info("Для включения детектора в пайплайне установите ANOMALY_ENABLED=1")

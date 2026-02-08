@@ -12,6 +12,7 @@ import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report, confusion_matrix, f1_score
 
+import config as cfg
 from config import (
     LABEL_ENCODER_PATH,
     FEATURE_SCHEMA_PATH,
@@ -48,11 +49,30 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _env_int(name: str, default: int) -> int:
+    """Читает int из переменной окружения (с безопасным fallback).
+
+    Args:
+        name: Имя переменной окружения.
+        default: Значение по умолчанию.
+
+    Returns:
+        Значение int.
+    """
+    raw = os.getenv(name)
+    if raw is None:
+        return int(default)
+    try:
+        return int(raw)
+    except Exception:
+        return int(default)
+
+
 @dataclass
 class RiskPolicy:
     """Политика формирования риска/алерта по выходам классификатора и TI.
 
-    Attributes:
+    Атрибуты:
         precheck: Порог, при котором допустимо делать дорогую проверку TI (репутация IP).
         alert_threshold: Порог итогового риска для формирования алерта по классификатору.
         enable_ti: Разрешить ли TI-обогащение (AbuseIPDB и т.п.).
@@ -120,7 +140,10 @@ class Analyzer:
         logger.info("Запуск обучения модели: %s", self.model_type.upper())
 
         if self.model_type == "rf":
-            self.model = RandomForestClassifier(n_estimators=200, random_state=42, n_jobs=-1)
+            # На Windows в некоторых окружениях параллельность sklearn/joblib может упираться в ACL/IPC.
+            # Делаем n_jobs управляемым через env.
+            n_jobs = _env_int("PREVISOR_SKLEARN_N_JOBS", 1)
+            self.model = RandomForestClassifier(n_estimators=200, random_state=42, n_jobs=int(n_jobs))
         else:
             if XGBClassifier is None:
                 raise RuntimeError("xgboost не установлен в окружении, невозможно обучить XGB.")
@@ -233,6 +256,7 @@ class Analyzer:
                 "probability": float(risk_score),
                 "timestamp": datetime.now().isoformat(),
                 "source_ip": ip,
+                "row_index": int(i),
             }
             alerts.append(alert)
 
@@ -261,9 +285,14 @@ class Analyzer:
 
     def load_model(self) -> None:
         """Загружает модель с диска."""
-        if os.path.exists(self.model_path):
-            self.model = joblib.load(self.model_path)
-            logger.info("Модель загружена: %s", self.model_path)
+        fallback = cfg.RF_PRETRAINED_MODEL_PATH if self.model_type == "rf" else cfg.XGB_PRETRAINED_MODEL_PATH
+        resolved = cfg.resolve_artifact_path(self.model_path, fallback)
+        if os.path.exists(resolved):
+            self.model = joblib.load(resolved)
+            if resolved != self.model_path:
+                logger.info("Модель загружена (pretrained): %s", resolved)
+            else:
+                logger.info("Модель загружена: %s", resolved)
         else:
             logger.error("Модель не найдена: %s", self.model_path)
             self.model = None
@@ -292,12 +321,13 @@ class Analyzer:
     def _load_label_encoder(self) -> None:
         """Пробует загрузить LabelEncoder из runtime-пути.
 
-        Если файл отсутствует — оставляет self.label_encoder=None, и decode будет через fallback.
+        Если файл отсутствует - оставляет self.label_encoder=None, и decode будет через fallback.
         """
         try:
-            if os.path.exists(LABEL_ENCODER_PATH):
-                self.label_encoder = joblib.load(LABEL_ENCODER_PATH)
-                logger.info("LabelEncoder загружен: %s", LABEL_ENCODER_PATH)
+            resolved = cfg.resolve_artifact_path(LABEL_ENCODER_PATH, cfg.LABEL_ENCODER_PRETRAINED_PATH)
+            if os.path.exists(resolved):
+                self.label_encoder = joblib.load(resolved)
+                logger.info("LabelEncoder загружен: %s", resolved)
         except Exception as exc:
             logger.warning("Не удалось загрузить LabelEncoder (%s): %s", LABEL_ENCODER_PATH, exc)
             self.label_encoder = None

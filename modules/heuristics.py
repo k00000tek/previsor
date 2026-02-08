@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import ipaddress
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -119,8 +120,19 @@ class HeuristicPolicy:
         if self.suspicious_ports is None:
             self.suspicious_ports = _env_csv_ints(
                 "PREVISOR_SUSPICIOUS_PORTS",
-                default=[21, 22, 23, 25, 53, 80, 443, 445, 3389, 1433, 3306, 5432, 6379, 27017, 5900],
+                default=[21, 22, 23, 25, 445, 3389, 1433, 3306, 5432, 6379, 27017, 5900],
             )
+
+
+def _is_private_ip(value: Optional[str]) -> bool:
+    """Проверяет, что IP относится к private/loopback/link-local сети."""
+    if not value:
+        return False
+    try:
+        ip = ipaddress.ip_address(str(value))
+    except ValueError:
+        return False
+    return bool(ip.is_private or ip.is_loopback or ip.is_link_local)
 
 
 def _col(df: pd.DataFrame, *names: str) -> Optional[str]:
@@ -161,10 +173,14 @@ def _safe_iter_text(row: pd.Series, cols: Iterable[str]) -> str:
     return " ".join(parts)
 
 
-def detect_heuristic_alerts(df: pd.DataFrame) -> List[Dict[str, Any]]:
-    """Heuristic detections for DDoS/port scanning/suspicious ports/HTTP anomalies.
+def detect_heuristic_alerts(
+    df: pd.DataFrame,
+    *,
+    require_private_target: bool = False,
+) -> List[Dict[str, Any]]:
+    """Ищет угрозы эвристиками (DDoS/port scanning/подозрительные порты/HTTP-паттерны).
 
-    This works on raw traffic rows (pre-preprocessing), so it is resilient to dataset variety.
+    Детектор работает по сырым строкам трафика (до предобработки), поэтому устойчив к вариативности датасетов.
     """
     policy = HeuristicPolicy()
     if not policy.enabled:
@@ -180,6 +196,15 @@ def detect_heuristic_alerts(df: pd.DataFrame) -> List[Dict[str, Any]]:
     dest_ip_col = _col(df, "dest_ip", "dst_ip", "Destination IP")
     dest_port_col = _col(df, "dest_port", "dst_port", "Destination Port")
 
+    if require_private_target:
+        if not dest_ip_col:
+            logger.debug("Heuristics skipped: dest_ip missing for private-target mode")
+            return []
+        mask = df[dest_ip_col].astype(str).map(_is_private_ip)
+        df = df[mask]
+        if df.empty:
+            return []
+
     # Port scanning: many unique dest ports from one source in a batch.
     if source_col and dest_port_col:
         grouped = df.groupby(source_col)[dest_port_col].agg(["nunique", "count"])
@@ -188,6 +213,11 @@ def detect_heuristic_alerts(df: pd.DataFrame) -> List[Dict[str, Any]]:
             & (grouped["count"] >= policy.portscan_min_total_packets)
         ]
         for src_ip, row in offenders.iterrows():
+            row_index = None
+            try:
+                row_index = int(df[df[source_col] == src_ip].index[0])
+            except Exception:
+                row_index = None
             alerts.append(
                 {
                     "alert": 1,
@@ -200,6 +230,7 @@ def detect_heuristic_alerts(df: pd.DataFrame) -> List[Dict[str, Any]]:
                     },
                     "timestamp": now,
                     "detection_source": "heuristics",
+                    "row_index": row_index,
                 }
             )
 
@@ -212,6 +243,11 @@ def detect_heuristic_alerts(df: pd.DataFrame) -> List[Dict[str, Any]]:
             & (grouped["count"] >= policy.ddos_min_total_packets)
         ]
         for target, row in offenders.iterrows():
+            row_index = None
+            try:
+                row_index = int(df[df[target_col] == target].index[0])
+            except Exception:
+                row_index = None
             alerts.append(
                 {
                     "alert": 1,
@@ -225,6 +261,7 @@ def detect_heuristic_alerts(df: pd.DataFrame) -> List[Dict[str, Any]]:
                     },
                     "timestamp": now,
                     "detection_source": "heuristics",
+                    "row_index": row_index,
                 }
             )
 
@@ -236,6 +273,16 @@ def detect_heuristic_alerts(df: pd.DataFrame) -> List[Dict[str, Any]]:
                 grouped = port_hits.groupby([source_col, dest_port_col]).size()
                 for (src_ip, port), count in grouped.items():
                     if int(count) >= policy.suspicious_port_min_hits:
+                        row_index = None
+                        try:
+                            row_index = int(
+                                port_hits[
+                                    (port_hits[source_col] == src_ip)
+                                    & (port_hits[dest_port_col] == port)
+                                ].index[0]
+                            )
+                        except Exception:
+                            row_index = None
                         alerts.append(
                             {
                                 "alert": 1,
@@ -245,23 +292,30 @@ def detect_heuristic_alerts(df: pd.DataFrame) -> List[Dict[str, Any]]:
                                 "details": {"dest_port": int(port), "hits": int(count)},
                                 "timestamp": now,
                                 "detection_source": "heuristics",
+                                "row_index": row_index,
                             }
                         )
             else:
                 grouped = port_hits.groupby(dest_port_col).size()
                 for port, count in grouped.items():
                     if int(count) >= policy.suspicious_port_min_hits:
+                        row_index = None
+                        try:
+                            row_index = int(port_hits[port_hits[dest_port_col] == port].index[0])
+                        except Exception:
+                            row_index = None
                         alerts.append(
                             {
                                 "alert": 1,
                                 "alert_type": "Suspicious Port",
                                 "probability": min(1.0, float(count) / max(policy.suspicious_port_min_hits, 1)),
                                 "source_ip": None,
-                            "details": {"dest_port": int(port), "hits": int(count)},
-                            "timestamp": now,
-                            "detection_source": "heuristics",
-                        }
-                    )
+                                "details": {"dest_port": int(port), "hits": int(count)},
+                                "timestamp": now,
+                                "detection_source": "heuristics",
+                                "row_index": row_index,
+                            }
+                        )
 
     # HTTP anomalies: regex scan on URL/content-like fields.
     http_cols = [
@@ -270,7 +324,7 @@ def detect_heuristic_alerts(df: pd.DataFrame) -> List[Dict[str, Any]]:
         if c.lower() in {"url", "content", "host", "user-agent", "user_agent", "useragent"}
     ]
     if http_cols:
-        for _, row in df.iterrows():
+        for idx, row in df.iterrows():
             payload = _safe_iter_text(row, http_cols)
             if not payload:
                 continue
@@ -281,10 +335,11 @@ def detect_heuristic_alerts(df: pd.DataFrame) -> List[Dict[str, Any]]:
                         "alert_type": "HTTP Anomaly",
                         "probability": 0.9,
                         "source_ip": str(row.get(source_col)) if source_col else None,
-                    "details": {"columns": http_cols},
-                    "timestamp": now,
-                    "detection_source": "heuristics",
-                }
-            )
+                        "details": {"columns": http_cols},
+                        "timestamp": now,
+                        "detection_source": "heuristics",
+                        "row_index": int(idx) if isinstance(idx, int) else None,
+                    }
+                )
 
     return alerts

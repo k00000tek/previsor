@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import logging
 import os
+import warnings
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Union, Literal, List
 
 import joblib
 import pandas as pd
+from pandas.errors import PerformanceWarning
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, LabelEncoder, OneHotEncoder
 
+import config as cfg
 from config import DATA_RUNTIME_DIR, MODELS_RUNTIME_DIR
 
 Purpose = Literal["train", "inference"]
@@ -18,12 +21,14 @@ logger = logging.getLogger(__name__)
 if not logging.getLogger().handlers:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
+warnings.filterwarnings("ignore", category=PerformanceWarning)
+
 
 @dataclass
 class PreprocessorArtifacts:
     """Артефакты предобработки, общие для train и inference.
 
-    Attributes:
+    Атрибуты:
         scaler: Объект масштабирования (MinMaxScaler/StandardScaler).
         scaler_columns: Список колонок, на которых обучался scaler (порядок важен).
         http_ohe: OneHotEncoder для http_method.
@@ -58,10 +63,12 @@ def _artifact_paths(artifacts_dir: str) -> Dict[str, str]:
     }
 
 
-def _load_if_exists(path: str) -> Optional[Any]:
-    """Загружает объект из joblib, если файл существует."""
-    if os.path.exists(path):
-        return joblib.load(path)
+def _load_artifact(runtime_path: str, fallback_path: Optional[str] = None) -> Optional[Any]:
+    """Загружает артефакт из runtime или fallback (pretrained), если доступен."""
+    if runtime_path and os.path.exists(runtime_path):
+        return joblib.load(runtime_path)
+    if fallback_path and os.path.exists(fallback_path):
+        return joblib.load(fallback_path)
     return None
 
 
@@ -129,6 +136,7 @@ def preprocess_data(
     _ensure_dir(output_dir)
     _ensure_dir(artifacts_dir)
     paths = _artifact_paths(artifacts_dir)
+    pretrained_paths = _artifact_paths(cfg.MODELS_PRETRAINED_DIR)
 
     # --- 0) Загрузка данных ---
     if isinstance(input_data, pd.DataFrame):
@@ -197,10 +205,10 @@ def preprocess_data(
     # --- 3) Загрузка артефактов (ТОЛЬКО load в inference) ---
     artifacts = PreprocessorArtifacts()
 
-    artifacts.scaler = _load_if_exists(paths["scaler"])
-    artifacts.scaler_columns = _load_if_exists(paths["scaler_cols"])
-    artifacts.http_ohe = _load_if_exists(paths["http_ohe"])
-    artifacts.label_encoder = _load_if_exists(paths["label_encoder"])
+    artifacts.scaler = _load_artifact(paths["scaler"], pretrained_paths.get("scaler"))
+    artifacts.scaler_columns = _load_artifact(paths["scaler_cols"], pretrained_paths.get("scaler_cols"))
+    artifacts.http_ohe = _load_artifact(paths["http_ohe"], pretrained_paths.get("http_ohe"))
+    artifacts.label_encoder = _load_artifact(paths["label_encoder"], pretrained_paths.get("label_encoder"))
 
     # --- 4) Feature engineering (безопасно, если колонок нет) ---
     if "flow_duration" in df.columns and "packet_count" in df.columns:

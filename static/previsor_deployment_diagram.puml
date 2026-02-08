@@ -15,13 +15,12 @@ skinparam artifact {
 node "ПК пользователя\n(Windows)" as Client {
     artifact "Браузер\n(Browser)" as Browser
     artifact "Flask-приложение\n(app.py)" as FlaskApp
+    artifact "Непрерывный монитор\n(collector + processor)" as Monitor
+    artifact "Telegram polling\n(commands)" as TgPoll
     artifact "Модули анализа\n(modules/*)" as AnalyzerMods
+    artifact "Baseline manager\n(modules.baseline_manager)" as BaselineMgr
     artifact "SQLite DB\n(db/runtime/previsor.db)" as DB
-}
-
-node "Опционально" as Optional {
-    artifact "Celery worker\n(celery_app.py)" as CeleryApp
-    artifact "Redis broker" as Redis
+    artifact "Runtime артефакты моделей\n(models/runtime/*)" as Artifacts
 }
 
 cloud "Внешние сервисы" as Cloud {
@@ -30,13 +29,18 @@ cloud "Внешние сервисы" as Cloud {
 }
 
 Browser --> FlaskApp : HTTP
+FlaskApp --> Monitor : start/stop/status
 FlaskApp --> AnalyzerMods : анализ/предобработка
+FlaskApp --> BaselineMgr : retrain IF (из БД)
+TgPoll --> FlaskApp : обработка /start,/selectchat,...
+Monitor --> AnalyzerMods : batch analysis
 FlaskApp --> DB : SQL
-AnalyzerMods --> DB : alerts/logs
+AnalyzerMods --> DB : traffic_logs / ip_cache
+FlaskApp --> DB : alerts
+BaselineMgr --> DB : baseline candidates
+BaselineMgr --> Artifacts : isolation_forest.pkl + stats
 AnalyzerMods --> TI : репутация IP (опционально)
-AnalyzerMods --> Notif : уведомления
-
-CeleryApp --> Redis : broker
-CeleryApp --> AnalyzerMods : плановые задачи
+FlaskApp --> Notif : уведомления/команды
+TgPoll --> Notif : getUpdates
 
 @enduml

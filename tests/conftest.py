@@ -1,9 +1,29 @@
 from __future__ import annotations
 
 import os
+import shutil
+import uuid
 from pathlib import Path
 
 import pytest
+
+
+@pytest.fixture
+def tmp_path() -> Path:
+    """Локальный аналог pytest tmp_path без tmpdir-плагина.
+
+    В этом окружении стандартный tmpdir/tmp_path может создавать директории,
+    которые становятся недоступны по ACL (WinError 5). Здесь мы делаем временную
+    директорию внутри репозитория без выставления специфичных прав.
+    """
+    base = Path.cwd() / ".tests_tmp"
+    base.mkdir(parents=True, exist_ok=True)
+    path = base / uuid.uuid4().hex
+    path.mkdir(parents=True, exist_ok=False)
+    try:
+        yield path
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
 
 
 @pytest.fixture(autouse=True)
@@ -35,6 +55,9 @@ def test_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     # dev-only (если в app есть dev эндпоинты)
     monkeypatch.setenv("PREVISOR_ENABLE_DEV_ENDPOINTS", "true")
+
+    # Упрощаем параллельность sklearn/joblib для стабильных тестов в Windows-среде.
+    monkeypatch.setenv("PREVISOR_SKLEARN_N_JOBS", "1")
 
     # На всякий случай — “старые” имена переменных, если где-то остались:
     monkeypatch.setenv("DATA_DIR", str(data_dir))

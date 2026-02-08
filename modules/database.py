@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import pandas as pd
-from sqlalchemy import Column, DateTime, Float, Integer, String, create_engine
+from sqlalchemy import Column, DateTime, Float, Integer, String, create_engine, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from config import DB_PATH
@@ -17,7 +17,7 @@ from config import DB_PATH
 
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 
-# Для SQLite + многопоточности (Flask/Celery) лучше отключать check_same_thread.
+# Для SQLite + многопоточности (Flask/background) лучше отключать check_same_thread.
 engine = create_engine(
     f"sqlite:///{DB_PATH}",
     echo=False,
@@ -38,6 +38,8 @@ class Alert(Base):
     """Таблица алертов (alerts).
 
     Хранит выявленные угрозы (классификатор + детектор аномалий) для API/дашборда.
+
+    Поле traffic_log_id связывает алерт с конкретной строкой в traffic_logs (если логирование включено).
     """
 
     __tablename__ = "alerts"
@@ -48,6 +50,7 @@ class Alert(Base):
     probability = Column(Float, nullable=False)
     source_ip = Column(String, nullable=True)
     status = Column(String, default="new", nullable=True)  # new, acknowledged, false_positive
+    traffic_log_id = Column(Integer, nullable=True)
 
 
 class IpCache(Base):
@@ -99,6 +102,17 @@ def init_db() -> None:
     """Создаёт таблицы (если их ещё нет)."""
     Base.metadata.create_all(engine)
 
+    # Миграция: добавляем traffic_log_id в alerts, если его нет (SQLite).
+    try:
+        with engine.begin() as conn:
+            cols = conn.execute(text("PRAGMA table_info(alerts)")).fetchall()
+            existing = {row[1] for row in cols} if cols else set()
+            if "traffic_log_id" not in existing:
+                conn.execute(text("ALTER TABLE alerts ADD COLUMN traffic_log_id INTEGER"))
+    except Exception:
+        # Игнорируем ошибки миграции, если БД отсутствует или уже обновлена.
+        pass
+
 
 init_db()
 
@@ -130,7 +144,13 @@ def session_scope():
 # Alerts API
 # -----------------------------
 
-def save_alert(alert_type: str, probability: float, source_ip: Optional[str] = None, status: str = "new") -> int:
+def save_alert(
+    alert_type: str,
+    probability: float,
+    source_ip: Optional[str] = None,
+    status: str = "new",
+    traffic_log_id: Optional[int] = None,
+) -> int:
     """Сохраняет один алерт в базе данных.
 
     Args:
@@ -138,6 +158,7 @@ def save_alert(alert_type: str, probability: float, source_ip: Optional[str] = N
         probability: Риск/вероятность (0..1).
         source_ip: Исходный IP (опционально).
         status: Статус алерта (new/acknowledged/false_positive).
+        traffic_log_id: ID записи в traffic_logs, связанной с алертом (опционально).
 
     Returns:
         ID созданного алерта.
@@ -148,7 +169,13 @@ def save_alert(alert_type: str, probability: float, source_ip: Optional[str] = N
         status = "new"
 
     with session_scope() as session:
-        alert = Alert(alert_type=alert_type, probability=float(probability), source_ip=source_ip, status=status)
+        alert = Alert(
+            alert_type=alert_type,
+            probability=float(probability),
+            source_ip=source_ip,
+            status=status,
+            traffic_log_id=int(traffic_log_id) if traffic_log_id is not None else None,
+        )
         session.add(alert)
         session.flush()  # получаем id без session.refresh
         return int(alert.id)
@@ -179,6 +206,15 @@ def get_alerts(
         if status:
             q = q.filter(Alert.status == status)
         return q.offset(int(offset)).limit(int(limit)).all()
+    finally:
+        session.close()
+
+
+def get_alert_by_id(alert_id: int) -> Optional[Alert]:
+    """Возвращает алерт по ID (или None)."""
+    session = SessionLocal()
+    try:
+        return session.query(Alert).filter(Alert.id == int(alert_id)).one_or_none()
     finally:
         session.close()
 
@@ -230,14 +266,13 @@ def purge_alerts(
     Returns:
         Количество удалённых записей.
     """
-    deleted = 0
     with session_scope() as session:
         q = session.query(Alert)
 
-    if status:
-        if status == "ignored":
-            status = "false_positive"
-        q = q.filter(Alert.status == status)
+        if status:
+            if status == "ignored":
+                status = "false_positive"
+            q = q.filter(Alert.status == status)
 
         if older_than_days is not None:
             border = datetime.utcnow() - timedelta(days=int(older_than_days))
@@ -245,7 +280,6 @@ def purge_alerts(
 
         if keep_last is not None:
             keep_last = int(keep_last)
-            # Получаем id последних N
             ids = (
                 session.query(Alert.id)
                 .order_by(Alert.timestamp.desc())
@@ -257,8 +291,7 @@ def purge_alerts(
                 q = q.filter(~Alert.id.in_(keep_ids))
 
         deleted = q.delete(synchronize_session=False)
-
-    return int(deleted)
+        return int(deleted)
 
 
 # -----------------------------
@@ -308,7 +341,12 @@ def upsert_ip_reputation(ip: str, reputation: float, *, source: str, checked_at:
 # Traffic logs API
 # -----------------------------
 
-def save_traffic_logs(df: pd.DataFrame, *, mode: Optional[str] = None) -> int:
+def save_traffic_logs(
+    df: pd.DataFrame,
+    *,
+    mode: Optional[str] = None,
+    return_ids: bool = False,
+) -> int | List[int]:
     """Сохраняет пачку строк трафика в traffic_logs.
 
     Функция специально “мягкая”: если каких-то колонок нет — они будут сохранены как NULL.
@@ -330,6 +368,7 @@ def save_traffic_logs(df: pd.DataFrame, *, mode: Optional[str] = None) -> int:
         return row[name] if name in cols else None
 
     count = 0
+    ids: List[int] = []
     with session_scope() as session:
         for _, row in df.iterrows():
             ts = _get(row, "timestamp")
@@ -354,8 +393,11 @@ def save_traffic_logs(df: pd.DataFrame, *, mode: Optional[str] = None) -> int:
             )
             session.add(item)
             count += 1
+            if return_ids:
+                session.flush()
+                ids.append(int(item.id))
 
-    return count
+    return ids if return_ids else count
 
 
 def get_traffic_logs(
@@ -382,3 +424,107 @@ def get_traffic_logs(
         return q.offset(int(offset)).limit(int(limit)).all()
     finally:
         session.close()
+
+
+def get_traffic_log_by_id(log_id: int) -> Optional[TrafficLog]:
+    """Возвращает запись traffic_logs по ID (или None)."""
+    session = SessionLocal()
+    try:
+        return session.query(TrafficLog).filter(TrafficLog.id == int(log_id)).one_or_none()
+    finally:
+        session.close()
+
+
+# -----------------------------
+# Baseline (для обучения аномалий) из traffic_logs
+# -----------------------------
+
+
+def count_baseline_candidates(*, mode: Optional[str] = "real") -> int:
+    """Считает количество baseline-кандидатов в traffic_logs.
+
+    В baseline попадают записи traffic_logs, у которых:
+    - mode совпадает с указанным (по умолчанию: "real"), либо mode=None (не фильтровать),
+    - нет связанных алертов со статусом, отличным от "false_positive"/"ignored".
+
+    То есть:
+    - либо алертов нет,
+    - либо все связанные алерты помечены как false_positive (или legacy "ignored").
+
+    Args:
+        mode: Фильтр по traffic_logs.mode. Если None — считает по всем режимам.
+
+    Returns:
+        Число baseline-кандидатов.
+    """
+    sql = """
+        SELECT COUNT(*) AS cnt
+        FROM traffic_logs t
+        WHERE (:mode IS NULL OR t.mode = :mode)
+          AND NOT EXISTS (
+              SELECT 1
+              FROM alerts a
+              WHERE a.traffic_log_id = t.id
+                AND COALESCE(a.status, 'new') NOT IN ('false_positive', 'ignored')
+          )
+    """
+    with engine.connect() as conn:
+        row = conn.execute(text(sql), {"mode": mode}).fetchone()
+        return int(row[0]) if row and row[0] is not None else 0
+
+
+def load_baseline_candidates_df(
+    *,
+    mode: Optional[str] = "real",
+    limit: Optional[int] = None,
+) -> pd.DataFrame:
+    """Возвращает DataFrame baseline-кандидатов из traffic_logs.
+
+    Возвращаемый DataFrame приводится к формату, совместимому с preprocess_data():
+    - добавляются поля packet_count=1 и Attack Type="Normal Traffic".
+
+    Args:
+        mode: Фильтр по traffic_logs.mode. Если None — не фильтрует.
+        limit: Если задано — ограничивает количество строк (берутся самые новые по id).
+
+    Returns:
+        DataFrame.
+    """
+    base_sql = """
+        SELECT
+            t.timestamp AS timestamp,
+            t.source_ip AS source_ip,
+            t.dest_ip AS dest_ip,
+            t.protocol AS protocol,
+            t.src_port AS src_port,
+            t.dest_port AS dest_port,
+            t.packet_len AS packet_len,
+            t.ttl AS ttl,
+            t.tcp_flags AS tcp_flags,
+            t.http_method AS http_method
+        FROM traffic_logs t
+        WHERE (:mode IS NULL OR t.mode = :mode)
+          AND NOT EXISTS (
+              SELECT 1
+              FROM alerts a
+              WHERE a.traffic_log_id = t.id
+                AND COALESCE(a.status, 'new') NOT IN ('false_positive', 'ignored')
+          )
+        ORDER BY t.id DESC
+    """
+
+    params: Dict[str, Any] = {"mode": mode}
+    if limit is not None and int(limit) > 0:
+        sql = base_sql + " LIMIT :limit"
+        params["limit"] = int(limit)
+    else:
+        sql = base_sql
+
+    df = pd.read_sql_query(text(sql), engine, params=params)
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    df = df.copy()
+    df["packet_count"] = 1
+    df["Attack Type"] = "Normal Traffic"
+    return df

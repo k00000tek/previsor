@@ -1,120 +1,91 @@
-# PreVisor: веб-система предиктивного мониторинга IT-инфраструктуры
+# PreVisor — мониторинг сетевых угроз и аномалий
 
-![Python](https://img.shields.io/badge/Python-3.12-lightblue)
-![Flask](https://img.shields.io/badge/Flask-3.1-lightgrey)
-![Scikit-learn](https://img.shields.io/badge/Scikit--learn-1.7-orange)
-![Celery](https://img.shields.io/badge/Celery-5.4-orange)
+PreVisor — веб‑приложение для предиктивного мониторинга IT‑инфраструктуры: захват сетевого трафика, выявление угроз (ML + эвристики), хранение событий в БД и уведомления в Telegram.
 
-## Описание
-PreVisor обнаруживает аномалии и сетевые угрозы по трафику с помощью ML и эвристик. Цель - раннее выявление угроз и снижение downtime в корпоративных сетях.
+## Типы алертов
+- `Suspicious Port` — повторяющиеся обращения к типичным «рискованным» портам.
+- `Port Scanning` — много уникальных портов от одного источника за короткий интервал.
+- `DDoS` — всплеск пакетов от множества источников к одной цели.
+- `HTTP Anomaly` — подозрительные HTTP‑паттерны (инъекции, traversal и т.п.).
+- `Anomaly` — нетипичное поведение трафика относительно привычного baseline (возможная новая/редкая угроза или сбой).
 
-## Основные возможности
-- Real-режим: захват трафика и анализ в фоне.
-- Модели: RandomForest/XGBoost + IsolationForest (аномалии).
-- Эвристики: DDoS, port scanning, подозрительные порты, HTTP-аномалии.
-- Telegram-уведомления о новых алертах.
-- Дашборд: фильтры, статусы, статистика.
+## Требования (Windows, real‑режим)
+- Python 3.12+ и PowerShell.
+- Для захвата трафика нужен Npcap (желательно режим совместимости с WinPcap).
+- Для sniff реального трафика PowerShell должен быть запущен **от имени администратора**.
 
-## Быстрый старт
-1. Клонируйте репозиторий:
-   ```bash
-   git clone https://github.com/k00000tek/previsor
-   cd previsor
-   ```
-2. Создайте и активируйте окружение:
-   ```bash
-   python -m venv .venv
-   source .venv/bin/activate  # Linux/macOS
-   .venv\Scripts\activate     # Windows
-   ```
-3. Установите зависимости:
-   ```bash
-   pip install -r requirements.txt
-   ```
-4. Запустите сервер:
-   ```bash
-   python app.py
-   ```
-Доступ: http://127.0.0.1:5000/health
-
-Полная инструкция (от клона до первого алерта): `docs/launch_guide_ru.md`.
-
-Эмуляция тестовых угроз: `docs/threat_emulation_ru.md`.
-
-Сценарии разработчика (PowerShell): `docs/test_scenarios_powershell.md`.
-
-## Настройка Telegram
-- Бот уже создан - найдите **PreVisor notifications bot**.
-- Отправьте `/start` в чат, где нужны уведомления.
-- Заполните `.env`:
-  ```ini
-  TELEGRAM_BOT_TOKEN=...
-  TELEGRAM_CHAT_ID=...
-  PREVISOR_TELEGRAM_ENABLED=true
-  ```
-
-## Реальный режим и выбор интерфейса
-- Запускайте PowerShell от имени администратора.
-- Интерфейс можно узнать через API:
-  ```powershell
-  Invoke-RestMethod http://127.0.0.1:5000/interfaces
-  ```
-- Задайте имя (пример):
-  ```powershell
-  $env:PREVISOR_NET_IFACE="Беспроводная сеть"
-  ```
-- Автоматический мониторинг включен по умолчанию (`PREVISOR_AUTO_MONITOR=true`).
-- Интервал мониторинга: `PREVISOR_AUTO_MONITOR_INTERVAL` (сек, по умолчанию 300).
-- Статус мониторинга: `GET /monitor/status`.
-
-## Работа через UI
-- Откройте http://127.0.0.1:5000/dashboard
-- Нажмите **Запустить анализ**.
-- Для baseline используйте **Собрать базовую выборку**.
-
-## Типы угроз (кратко)
-- `Suspicious Port` - повторяющиеся обращения к типичным рискованным портам.
-- `Port Scanning` - множество уникальных портов от одного источника.
-- `DDoS` - всплеск пакетов от большого числа источников к одной цели.
-- `HTTP Anomaly` - признаки подозрительных запросов (паттерны инъекций и т.п.).
-- `Anomaly` - аномалия по модели IsolationForest.
-
-## Фоновый мониторинг
-Авто-монитор работает в `app.py`:
-- включение: `PREVISOR_AUTO_MONITOR=true`
-- интервал: `PREVISOR_AUTO_MONITOR_INTERVAL=300`
-- статус: `GET /monitor/status`
-
-Celery можно подключить при необходимости, но для базового сценария не требуется.
-
-## Отчеты по обучению
-После обучения отчеты лежат в `models/runtime/last_report*.txt`.
-
-Обучение классификаторов:
+## Установка
 ```powershell
-python scripts/train_classifier.py --model rf
-python scripts/train_classifier.py --model xgb
+git clone https://github.com/k00000tek/previsor
+cd previsor
+python -m venv .venv
+.\.venv\Scripts\Activate
+pip install -r requirements.txt
 ```
 
-Обучение baseline для аномалий:
-```powershell
-python scripts/train_anomaly_baseline.py
+## Конфигурация (.env)
+Создай `.env` (можно взять за основу `.env.example`) и задай минимум:
+```ini
+PREVISOR_NET_IFACE=auto
+PREVISOR_TELEGRAM_ENABLED=true
+TELEGRAM_BOT_TOKEN=...
+TELEGRAM_CHAT_ID=...
 ```
 
-## База данных и IP-репутация
-- Алерты сохраняются в SQLite (таблица `alerts`).
-- Кэш `ip_cache` обновляется только при наличии `ABUSEIPDB_KEY` и успешных запросах к API.
+## Запуск
+```powershell
+python app.py
+```
+Проверка:
+```powershell
+Invoke-RestMethod http://127.0.0.1:5000/health
+```
+UI: `http://127.0.0.1:5000/dashboard`
 
-## API эндпоинты (кратко)
+Время в UI отображается в формате `MSK (UTC+3)`.
+
+## Telegram
+Чтобы получать уведомления, пользователь должен написать боту `/start` (в личку или в группе).
+
+Команды бота включены по умолчанию (отключение: `PREVISOR_TELEGRAM_COMMANDS=false`):
+- `/start` или `/help` — меню и описание.
+- `/selectchat` — привязать текущий чат для уведомлений.
+- `/status` — статус непрерывного мониторинга.
+- `/startmonitor` и `/stopmonitor` — управление мониторингом.
+Команды обрабатываются самим приложением, поэтому `app.py` должен быть запущен.
+В группах Telegram команда может прийти как `/selectchat@BotName` — это поддерживается.
+
+Если команды не работают (например, бот не отвечает на `/start`), проверьте webhook:
+- `GET /telegram/webhook_info` (dev endpoint) — если `result.url` не пустой, polling через `getUpdates` не будет работать.
+- Отключение webhook (dev): `POST /telegram/delete_webhook` (по умолчанию удаляет pending updates).
+- Диагностический тест Telegram API: `PREVISOR_RUN_TELEGRAM_DEBUG=true pytest -k telegram_bot_api_debug -s`.
+
+## Baseline и аномалии (IsolationForest)
+В real‑режиме baseline пополняется автоматически и используется для обучения/дообучения детектора аномалий.
+Baseline берётся из БД (`traffic_logs`), поэтому runtime‑CSV не раздувается бесконечным append.
+Записи, связанные с алертами, исключаются из baseline‑пула; если алерт помечен как `false_positive`, запись снова становится baseline‑кандидатом.
+
+Ключевые параметры:
+- `PREVISOR_BASELINE_TARGET_ROWS=5000` — минимальный размер baseline для первого обучения.
+- `PREVISOR_ANOMALY_RETRAIN_ROWS=5000` — дообучение после прироста baseline на N строк с момента последнего обучения.
+- `PREVISOR_ANOMALY_STRATEGY=baseline` и `PREVISOR_ANOMALY_BASELINE_QUANTILE=0.999` — порог аномальности относительно baseline‑статистики.
+- Для накопления baseline в БД должно быть включено логирование трафика: `PREVISOR_LOG_TRAFFIC=true`.
+
+## Эмуляция угроз
+См. `docs/threat_emulation_ru.md` (все команды выполняй только на своем ПК и в своей сети).
+
+## API (основное)
 - `GET /health`
 - `GET /interfaces`
 - `POST /analyze?mode=real&model=rf`
-- `GET /collect?mode=real&baseline=1&rows=200`
-- `GET /alerts?limit=10`
+- `GET /alerts?limit=50`
+- `GET /monitor/status`, `POST /monitor/start`, `POST /monitor/stop`
+- `POST /settings/interface` — смена `PREVISOR_NET_IFACE` (сохранение в `.env`)
+- `GET /telegram/status`
+- `GET /traffic_logs/<id>` — детальная запись по трафику для алерта (через `traffic_log_id`)
 
-## UI кто из пользует
-- Оператор/аналитик ИБ: просмотр алертов, фильтры, статусы.
-- Внутренние режимы demo/test/dataset скрыты по умолчанию (флаг `PREVISOR_ENABLE_DEV_UI=true`).
-
----
-Разработано в рамках ВКР, 2025.
+## Доп. документы
+- `docs/defense_pack_ru.md` — чек‑лист подготовки к защите.
+- `docs/powershell_scenarios.md` — сценарии PowerShell.
+- Диаграммы PlantUML: `static/*.puml`.
+- Список предобученных артефактов: `models/pretrained/MODELS_LIST.md`.

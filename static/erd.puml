@@ -27,6 +27,7 @@ entity "alerts" as Alerts {
   probability: FLOAT
   source_ip  : VARCHAR
   status     : VARCHAR
+  traffic_log_id : INTEGER
 }
 
 entity "traffic_logs" as TrafficLogs {
@@ -46,8 +47,10 @@ entity "traffic_logs" as TrafficLogs {
 }
 
 note right of Alerts
-Связи с ip_cache и traffic_logs
-логические (FK не используются).
+Связи с ip_cache и traffic_logs логические
+(в SQLite FK не enforced, но traffic_log_id хранится).
 end note
+
+Alerts::traffic_log_id }o--|| TrafficLogs::id : relates to
 
 @enduml

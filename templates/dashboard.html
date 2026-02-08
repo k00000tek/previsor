@@ -4,161 +4,933 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PreVisor Dashboard</title>
+
+  <link rel="icon" href="static/favicon.ico" type="image/x-icon" />
+
   <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+
+  <!-- Montserrat -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;750;800&display=swap" rel="stylesheet">
+
   <style>
-    body { padding: 20px; }
-    .card { margin-bottom: 20px; }
-    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
-    .small-muted { font-size: 0.9rem; color: #6c757d; }
+    :root{
+      --bg:#000000;
+      --ink:#EAF0FF;
+      --muted:rgba(234,240,255,.72);
+
+      /* Palette accents (по вашему списку) */
+      --violet:#5804A4;
+      --lavender:#CF9DFF;
+      --indigo:#1318F3;
+      --blue:#3C7DF9;
+
+      /* Ultra-dark glass */
+      --cardA: rgba(0,0,0,.18);  /* почти прозрачный */
+      --cardB: rgba(0,0,0,.12);  /* ещё чуть прозрачнее */
+      --cardHeader: rgba(0,0,0,.18);
+
+      --strokeSoft: rgba(60,125,249,.16);
+      --strokeMid:  rgba(60,125,249,.26);
+
+      --shadow: 0 18px 55px rgba(0,0,0,.90);
+
+      --radius2: 22px;
+      --radius: 18px;
+    }
+
+    *{ box-sizing:border-box; }
+    html,body{ height:100%; }
+
+    body{
+      margin:0;
+      font-family: "Montserrat", system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      color: var(--ink);
+      background: var(--bg); /* строго #000 */
+      overflow-x:hidden;
+      padding: 26px 0 40px;
+    }
+
+    /* Neon tubes overlay */
+    .tube-overlay{
+      position: fixed;
+      inset: -20vh -15vw;
+      pointer-events:none;
+      z-index: 0;
+      opacity: 1;
+      mix-blend-mode: screen;
+      transform: translateZ(0);
+    }
+
+    .wrap{ position: relative; z-index: 1; }
+
+    /* Раньше тут был моно-моно: теперь Montserrat везде, но с табличными цифрами */
+    .mono{
+      font-family: "Montserrat", system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: .15px;
+    }
+
+    .small-muted { font-size: 0.9rem; color: var(--muted) !important; }
+
+    /* Topbar */
+    .topbar{
+      display:flex;
+      align-items:flex-end;
+      justify-content:space-between;
+      gap:16px;
+      margin-bottom: 16px;
+    }
+
+    .brand{
+      display:flex;
+      align-items:center;
+      gap:14px;
+      min-width: 0;
+    }
+
+    /* LOGO: крупнее + неон-рамка */
+    .logoFrame{
+      width: 78px;
+      height: 78px;
+      border-radius: 22px;
+      padding: 3px;
+      background: linear-gradient(135deg,
+        rgba(60,125,249,.80),
+        rgba(19,24,243,.70),
+        rgba(88,4,164,.55),
+        rgba(207,157,255,.35)
+      );
+      box-shadow:
+        0 14px 40px rgba(0,0,0,.92),
+        0 0 26px rgba(60,125,249,.12),
+        0 0 18px rgba(19,24,243,.10),
+        0 0 14px rgba(88,4,164,.08);
+      flex: 0 0 auto;
+    }
+    .logo{
+      width: 100%;
+      height: 100%;
+      border-radius: 19px;
+      object-fit: cover;
+      display:block;
+      background: rgba(0,0,0,.40);
+      border: 1px solid rgba(255,255,255,.06);
+      box-shadow: inset 0 0 0 1px rgba(0,0,0,.35);
+    }
+
+    .brand h1{
+      margin:0;
+      font-size: 22px;
+      letter-spacing: .12px;
+      font-weight: 800;
+      line-height: 1.08;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: rgba(234,240,255,.98);
+      text-shadow:
+        0 0 12px rgba(60,125,249,.10),
+        0 0 10px rgba(19,24,243,.08);
+    }
+
+    .statusline{
+      margin-top: 6px;
+      display:flex;
+      flex-wrap: wrap;
+      gap: 10px 14px;
+      align-items: center;
+      color: rgba(234,240,255,.74);
+      font-size: 12.5px;
+    }
+
+    .kpi{
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(60,125,249,.18);
+      background: rgba(0,0,0,.20);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      white-space: nowrap;
+      box-shadow: 0 0 16px rgba(60,125,249,.04);
+    }
+
+    .kpi .dot{
+      width: 8px; height: 8px; border-radius: 99px;
+      background: rgba(234,240,255,.55);
+      box-shadow: 0 0 12px rgba(234,240,255,.06);
+    }
+    .kpi.primary .dot{ background: rgba(60,125,249,.90); box-shadow: 0 0 16px rgba(60,125,249,.14); }
+    .kpi.secondary .dot{ background: rgba(19,24,243,.90); box-shadow: 0 0 16px rgba(19,24,243,.12); }
+    .kpi.tertiary .dot{ background: rgba(88,4,164,.85); box-shadow: 0 0 16px rgba(88,4,164,.10); }
+
+    /* Buttons */
+    .btn-neon{
+      border: 1px solid rgba(60,125,249,.55) !important;
+      background: rgba(0,0,0,.22) !important;
+      color: rgba(234,240,255,.95) !important;
+      border-radius: 14px !important;
+      padding: 10px 12px !important;
+      font-weight: 800 !important;
+      letter-spacing:.2px !important;
+      box-shadow:
+        0 18px 45px rgba(0,0,0,.76) !important,
+        0 0 20px rgba(60,125,249,.10) !important,
+        0 0 14px rgba(19,24,243,.08) !important;
+      transition: transform .15s ease, filter .15s ease, box-shadow .15s ease;
+    }
+    .btn-neon:hover{
+      filter: brightness(1.06);
+      transform: translateY(-1px);
+      box-shadow:
+        0 18px 45px rgba(0,0,0,.76) !important,
+        0 0 26px rgba(60,125,249,.14) !important,
+        0 0 18px rgba(19,24,243,.10) !important,
+        0 0 14px rgba(88,4,164,.08) !important;
+    }
+    .btn-neon:active{ transform: translateY(0px) scale(.99); }
+
+    .btn-ghost{
+      border: 1px solid rgba(19,24,243,.32) !important;
+      background: rgba(0,0,0,.20) !important;
+      color: rgba(234,240,255,.92) !important;
+      border-radius: 14px !important;
+      padding: 10px 12px !important;
+      font-weight: 800 !important;
+      letter-spacing:.2px !important;
+      box-shadow:
+        0 0 16px rgba(19,24,243,.05),
+        0 0 12px rgba(88,4,164,.04);
+      transition: transform .15s ease, filter .15s ease, box-shadow .15s ease;
+    }
+    .btn-ghost:hover{
+      filter: brightness(1.06);
+      transform: translateY(-1px);
+      box-shadow:
+        0 0 22px rgba(19,24,243,.08),
+        0 0 16px rgba(88,4,164,.06);
+    }
+    .btn-ghost:active{ transform: translateY(0px) scale(.99); }
+
+    /* Cards: ПОЧТИ прозрачные, без “сильного” градиента и без яркости */
+    .card{
+      border-radius: var(--radius2) !important;
+      border: 1px solid transparent !important;
+      background:
+        linear-gradient(180deg, var(--cardA), var(--cardB)) padding-box,
+        linear-gradient(135deg,
+          rgba(60,125,249,.40),
+          rgba(19,24,243,.30),
+          rgba(88,4,164,.22),
+          rgba(207,157,255,.16)
+        ) border-box !important;
+      box-shadow:
+        var(--shadow) !important,
+        0 0 0 1px rgba(60,125,249,.10) !important,
+        0 0 18px rgba(60,125,249,.05) !important,
+        0 0 14px rgba(19,24,243,.04) !important,
+        0 0 12px rgba(88,4,164,.03) !important;
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+      overflow: hidden;
+      position: relative;
+    }
+
+    /* чуть подсветим “стекло”, но очень слабо */
+    .card::after{
+      content:"";
+      position:absolute;
+      inset: 0;
+      pointer-events:none;
+      border-radius: inherit;
+      background: radial-gradient(800px 260px at 20% 0%, rgba(60,125,249,.05), transparent 60%);
+      opacity: .55;
+    }
+    .card > *{ position: relative; z-index: 1; }
+
+    .card-header{
+      border-bottom: 1px solid rgba(60,125,249,.16) !important;
+      background: var(--cardHeader) !important;
+      color: rgba(234,240,255,.93) !important;
+      font-weight: 800;
+      letter-spacing: .25px;
+      text-transform: uppercase;
+      font-size: 13px;
+      text-shadow:
+        0 0 12px rgba(60,125,249,.06),
+        0 0 10px rgba(19,24,243,.05);
+    }
+
+    /* Inputs */
+    label.form-label{
+      color: rgba(234,240,255,.84);
+      font-size: 12px;
+      margin-bottom: 6px;
+      font-weight: 700;
+      letter-spacing: .12px;
+    }
+
+    .form-control{
+      color: rgba(234,240,255,.95) !important;
+      background: rgba(0,0,0,.20) !important;
+      border: 1px solid rgba(60,125,249,.22) !important;
+      border-radius: 14px !important;
+      box-shadow: 0 0 14px rgba(60,125,249,.04);
+      font-family: "Montserrat", system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif !important;
+    }
+
+    .form-control:focus{
+      border-color: rgba(60,125,249,.55) !important;
+      box-shadow:
+        0 0 0 .2rem rgba(60,125,249,.08) !important,
+        0 0 20px rgba(19,24,243,.10) !important;
+      background: rgba(0,0,0,.22) !important;
+      color: rgba(234,240,255,.98) !important;
+    }
+
+    /* Dropdown */
+    .dropdown-menu{
+      background: rgba(0,0,0,.78) !important;
+      border: 1px solid rgba(60,125,249,.28) !important;
+      border-radius: 16px !important;
+      box-shadow:
+        0 22px 60px rgba(0,0,0,.92) !important,
+        0 0 22px rgba(60,125,249,.08) !important,
+        0 0 16px rgba(88,4,164,.06) !important;
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      padding: 8px !important;
+    }
+
+    .dropdown-item{
+      color: rgba(234,240,255,.92) !important;
+      border-radius: 12px !important;
+      padding: 10px 10px !important;
+      font-weight: 650;
+    }
+
+    .dropdown-item:hover{
+      background: rgba(60,125,249,.08) !important;
+      color: rgba(234,240,255,.98) !important;
+    }
+
+    .mode-help {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      border: 1px solid rgba(60,125,249,.40);
+      color: rgba(234,240,255,.84);
+      font-size: 12px;
+      line-height: 1;
+      margin-left: 8px;
+      cursor: help;
+      background: rgba(0,0,0,.22);
+      box-shadow:
+        0 0 14px rgba(60,125,249,.06),
+        0 0 12px rgba(88,4,164,.05);
+    }
+
+    /* Badges base */
+    .badge{
+      border: 2px solid rgba(60,125,249,.26);
+      background: rgba(0,0,0,.14);
+      color: rgba(234,240,255,.95);
+      font-weight: 800;
+      letter-spacing: .15px;
+      text-shadow: 0 0 10px rgba(60,125,249,.06);
+    }
+
+    /* Type badges (разные акцентные цвета) */
+    .type-badge{ padding: .40rem .55rem; border-radius: 999px; }
+    .type-blue   { border-color: rgba(60,125,249,.60); background: rgba(60,125,249,.10); color: rgba(234,240,255,.98); }
+    .type-indigo { border-color: rgba(19,24,243,.55); background: rgba(19,24,243,.10); color: rgba(234,240,255,.98); }
+    .type-violet { border-color: rgba(88,4,164,.50);  background: rgba(88,4,164,.10);  color: rgba(234,240,255,.98); }
+    .type-lav    { border-color: rgba(207,157,255,.45); background: rgba(207,157,255,.08); color: rgba(234,240,255,.98); }
+    .type-neutral{ border-color: rgba(255,255,255,.18); background: rgba(255,255,255,.06); color: rgba(234,240,255,.92); }
+
+    /* Status badges (толстая граница, фон как таблица) */
+    .status-badge{ padding: .40rem .55rem; border-radius: 999px; background: rgba(0,0,0,.12) !important; }
+    .status-new{
+      border-color: rgba(60,125,249,.70) !important;
+      color: rgba(234,240,255,.98) !important;
+    }
+    .status-ack{
+      border-color: rgba(46,242,167,.70) !important;
+      color: rgba(234,240,255,.98) !important;
+    }
+    .status-fp{
+      border-color: rgba(255,255,255,.32) !important;
+      color: rgba(234,240,255,.92) !important;
+    }
+
+    /* Plotly containers */
+    #typeChart, #timeChart{
+      border-radius: 16px;
+      overflow:hidden;
+      background: rgba(0,0,0,.10);
+      box-shadow:
+        0 0 0 1px rgba(60,125,249,.18),
+        0 0 18px rgba(60,125,249,.05),
+        0 0 14px rgba(88,4,164,.04);
+    }
+
+    /* TABLE: полностью чёрная/прозрачная (без белого) */
+    .table{
+      --bs-table-bg: transparent;
+      --bs-table-color: rgba(234,240,255,.92);
+      --bs-table-border-color: rgba(60,125,249,.14);
+      --bs-table-striped-bg: rgba(60,125,249,.015);
+      --bs-table-striped-color: rgba(234,240,255,.92);
+      --bs-table-hover-bg: rgba(60,125,249,.02);
+      --bs-table-hover-color: rgba(234,240,255,.96);
+
+      color: var(--bs-table-color) !important;
+      margin:0;
+      font-weight: 500;
+      background: transparent !important;
+    }
+
+    .table thead th{
+      font-size: 12px;
+      color: rgba(234,240,255,.78) !important;
+      text-transform: uppercase;
+      letter-spacing: .25px;
+      border-bottom: 1px solid rgba(60,125,249,.18) !important;
+      background: rgba(0,0,0,.14) !important;
+      font-weight: 800;
+    }
+
+    .table tbody tr{
+      border-top: 1px solid rgba(255,255,255,.04) !important;
+      background: transparent !important;
+      transition: background .15s ease;
+    }
+
+    .table td, .table th{
+      padding: 10px 10px !important;
+      vertical-align: middle !important;
+      background: transparent !important;
+    }
+
+    /* Кнопки в таблице: фон = фон таблицы, граница толще, цвета по статусам */
+    .btn-table{
+      border-radius: 12px !important;
+      padding: 7px 10px !important;
+      font-weight: 800 !important;
+      letter-spacing: .15px;
+      background: transparent !important;
+      border-width: 2px !important;
+      box-shadow: 0 0 14px rgba(0,0,0,.0);
+    }
+
+    .btn-table-success{
+      border-color: rgba(46,242,167,.65) !important;
+      color: rgba(234,240,255,.95) !important;
+    }
+    .btn-table-success:hover{
+      background: rgba(46,242,167,.08) !important;
+    }
+
+    .btn-table-secondary{
+      border-color: rgba(255,255,255,.26) !important;
+      color: rgba(234,240,255,.92) !important;
+    }
+    .btn-table-secondary:hover{
+      background: rgba(255,255,255,.06) !important;
+    }
+
+    .card.card-network{
+      overflow: visible !important;
+      z-index: 30;
+    }
+    .card.card-network .dropdown-menu{
+      z-index: 2000 !important;
+    }
+
+    .card.card-filters{
+      overflow: visible !important;
+      z-index: 30;
+    }
+    .card.card-filters .dropdown-menu{
+      z-index: 2000 !important;
+    }
+
+    @media (max-width: 992px){
+      .topbar{ align-items:flex-start; flex-direction:column; }
+      .brand h1{ white-space: normal; }
+    }
+
+    #netIfaceMenu{
+      max-height: 320px;
+      overflow-y: auto;
+      overflow-x: hidden;
+      overscroll-behavior: contain;
+    }
+
+    #netIfaceMenu .dropdown-item{
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
   </style>
 </head>
+
 <body>
-  <div class="container">
-    <div class="d-flex justify-content-between align-items-end mb-3">
-      <div>
-        <h1 class="mb-0">PreVisor — мониторинг угроз</h1>
-        <div class="small-muted">Последнее обновление: <span id="lastRefresh" class="mono">—</span></div>
-      </div>
-      <div>
-        <button class="btn btn-outline-secondary" onclick="loadAlerts()">Обновить сейчас</button>
-      </div>
-    </div>
+  <!-- Neon tubes overlay -->
+  <svg class="tube-overlay" viewBox="0 0 1400 900" preserveAspectRatio="none" aria-hidden="true">
+    <defs>
+      <linearGradient id="tubeA" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#3C7DF9" stop-opacity="0.55"/>
+        <stop offset="0.50" stop-color="#1318F3" stop-opacity="0.42"/>
+        <stop offset="1" stop-color="#CF9DFF" stop-opacity="0.18"/>
+      </linearGradient>
+      <linearGradient id="tubeB" x1="1" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#1318F3" stop-opacity="0.48"/>
+        <stop offset="0.60" stop-color="#5804A4" stop-opacity="0.34"/>
+        <stop offset="1" stop-color="#3C7DF9" stop-opacity="0.18"/>
+      </linearGradient>
 
-    <!-- Панель запуска анализа / сбор baseline -->
-    <div class="card mb-4">
-      <div class="card-body row g-3 align-items-end">
-        <div class="col-md-4">
-          <label class="form-label">Файл для анализа (опционально)</label>
-          <input type="file" id="fileInput" class="form-control">
-        </div>
-        <div class="col-md-2">
-          <label class="form-label">Режим</label>
-          <select id="runMode" class="form-select">
-            <option value="real">real</option>
-            {% if enable_dev_ui %}
-            <option value="demo">demo</option>
-            <option value="test">test</option>
-            <option value="dataset">dataset</option>
-            {% endif %}
-          </select>
-        </div>
-        <div class="col-md-2">
-          <label class="form-label">Модель</label>
-          <select id="runModel" class="form-select">
-            <option value="rf">rf</option>
-            <option value="xgb">xgb</option>
-          </select>
-        </div>
-        <div class="col-md-2">
-          <button class="btn btn-primary w-100" onclick="runAnalysis()">Запустить анализ</button>
-        </div>
-        <div class="col-md-2">
-          <button class="btn btn-outline-primary w-100" onclick="collectBaseline()">Собрать базовую выборку</button>
+      <filter id="glowA">
+        <feGaussianBlur stdDeviation="4.6" result="b"/>
+        <feColorMatrix in="b" type="matrix"
+          values="1 0 0 0 0
+                  0 1 0 0 0
+                  0 0 1 0 0
+                  0 0 0 14 -6" result="g"/>
+        <feMerge>
+          <feMergeNode in="g"/>
+          <feMergeNode in="SourceGraphic"/>
+        </feMerge>
+      </filter>
+    </defs>
+
+    <!-- Tubes -->
+    <path d="M -120 260 C 120 120, 360 420, 600 280 S 980 220, 1180 360 S 1500 420, 1540 260"
+          fill="none" stroke="url(#tubeA)" stroke-width="18" stroke-linecap="round" filter="url(#glowA)"/>
+    <path d="M -140 650 C 120 520, 360 760, 620 640 S 980 520, 1180 680 S 1500 760, 1540 600"
+          fill="none" stroke="url(#tubeB)" stroke-width="14" stroke-linecap="round" filter="url(#glowA)"/>
+
+    <!-- тонкие контуры -->
+    <path d="M -90 240 C 160 110, 360 420, 620 300 S 980 220, 1180 360 S 1500 420, 1520 280"
+          fill="none" stroke="rgba(60,125,249,0.14)" stroke-width="2.0"/>
+    <path d="M -80 292 C 150 160, 360 440, 610 320 S 980 240, 1180 380 S 1500 440, 1520 310"
+          fill="none" stroke="rgba(19,24,243,0.12)" stroke-width="1.6"/>
+    <path d="M -110 670 C 140 540, 380 770, 640 660 S 980 520, 1180 680 S 1500 760, 1540 620"
+          fill="none" stroke="rgba(88,4,164,0.12)" stroke-width="1.8"/>
+
+    <path d="M 220 -60 C 320 120, 140 240, 300 360 S 520 540, 360 660 S 240 820, 420 980"
+          fill="none" stroke="rgba(60,125,249,0.08)" stroke-width="2.0"/>
+    <path d="M 1240 -80 C 1120 120, 1320 240, 1140 360 S 940 560, 1120 680 S 1260 820, 1060 980"
+          fill="none" stroke="rgba(207,157,255,0.07)" stroke-width="2.0"/>
+  </svg>
+
+  <div class="wrap">
+    <div class="container">
+
+      <!-- Header -->
+      <div class="topbar">
+        <div class="brand">
+          <div class="logoFrame">
+            <img
+              class="logo"
+              src="static/logo.png"
+              alt="PreVisor logo"
+              onerror="this.closest('.logoFrame').style.display='none'"
+            />
+          </div>
+
+          <div style="min-width:0;">
+            <h1 class="mb-0">PreVisor — мониторинг угроз</h1>
+
+            <div class="statusline">
+              <span class="kpi primary">
+                <span class="dot"></span>
+                Мониторинг: <span id="monitorState" class="badge">-</span>
+              </span>
+
+              <span class="kpi">
+                <span class="dot"></span>
+                Очередь: <span id="monitorQueue" class="mono">-</span>
+              </span>
+
+              <span class="kpi secondary">
+                <span class="dot"></span>
+                Батч: <span id="monitorBatch" class="mono">-</span>
+              </span>
+
+              <span class="kpi tertiary">
+                <span class="dot"></span>
+                Telegram: <span id="telegramStatus" class="badge">-</span>
+              </span>
+
+              <span class="kpi">
+                <span class="dot"></span>
+                Последнее обновление: <span id="lastRefresh" class="mono">-</span>
+              </span>
+
+              <span class="kpi">
+                <span class="dot"></span>
+                Время: <span id="timeZoneLabel" class="mono">MSK (UTC+3)</span>
+              </span>
+            </div>
+          </div>
         </div>
 
-        <div class="col-12 small-muted">
-          <div id="runResult">Сводка последнего запуска: —</div>
+        <div class="btn-group">
+          <button class="btn btn-neon" onclick="startMonitor()">Старт мониторинга</button>
+          <button class="btn btn-ghost" onclick="stopMonitor()">Стоп</button>
+          <button class="btn btn-ghost" onclick="loadAlerts()">Обновить дашборд</button>
         </div>
       </div>
-    </div>
 
-    <div class="row">
-      <!-- График по типам -->
-      <div class="col-md-6">
-        <div class="card">
-          <div class="card-header">Алерты по типам</div>
-          <div class="card-body">
-            <div id="typeChart" style="height: 320px;"></div>
+      <!-- Панель запуска анализа / сбор baseline -->
+      <div class="card mb-4 card-network">
+        <div class="card-body">
+          <div class="row g-3 align-items-end">
+            <div class="col-md-5">
+              <label class="form-label">Файл для анализа (опционально)</label>
+              <input type="file" id="fileInput" class="form-control">
+            </div>
+
+            <!-- Режим (как было) -->
+            <div class="col-md-3">
+              <label class="form-label">Режим</label>
+              <input type="hidden" id="runMode" value="real">
+              <div class="dropdown">
+                <button id="runModeBtn" class="btn btn-ghost dropdown-toggle w-100 text-start" data-bs-toggle="dropdown">
+                  real
+                </button>
+                <ul class="dropdown-menu w-100">
+                  <li>
+                    <a class="dropdown-item d-flex justify-content-between align-items-center" href="#" onclick="setRunMode('real'); return false;">
+                      <span>real</span>
+                      <span class="mode-help" title="Захват реального трафика с интерфейса, подходит для основного сценария.">?</span>
+                    </a>
+                  </li>
+                  <li>
+                    <a class="dropdown-item d-flex justify-content-between align-items-center" href="#" onclick="setRunMode('demo'); return false;">
+                      <span>demo</span>
+                      <span class="mode-help" title="Демонстрация на sample/симулированных данных (быстро и безопасно).">?</span>
+                    </a>
+                  </li>
+                  <li>
+                    <a class="dropdown-item d-flex justify-content-between align-items-center" href="#" onclick="setRunMode('test'); return false;">
+                      <span>test</span>
+                      <span class="mode-help" title="Внутренний тестовый режим (для проверки пайплайна).">?</span>
+                    </a>
+                  </li>
+                  <li>
+                    <a class="dropdown-item d-flex justify-content-between align-items-center" href="#" onclick="setRunMode('dataset'); return false;">
+                      <span>dataset</span>
+                      <span class="mode-help" title="Запуск по подготовленному processed датасету из data/runtime/datasets.">?</span>
+                    </a>
+                  </li>
+                </ul>
+              </div>
+            </div>
+
+            <!-- Модель: теперь тоже dropdown как "Режим" -->
+            <div class="col-md-2">
+              <label class="form-label">Модель</label>
+              <input type="hidden" id="runModel" value="rf">
+              <div class="dropdown">
+                <button id="runModelBtn" class="btn btn-ghost dropdown-toggle w-100 text-start" data-bs-toggle="dropdown">
+                  rf
+                </button>
+                <ul class="dropdown-menu w-100">
+                  <li><a class="dropdown-item" href="#" onclick="setRunModel('rf'); return false;">rf</a></li>
+                  <li><a class="dropdown-item" href="#" onclick="setRunModel('xgb'); return false;">xgb</a></li>
+                </ul>
+              </div>
+            </div>
+
+            <div class="col-md-2">
+              <button class="btn btn-neon w-100" onclick="runAnalysis()">Разовый анализ</button>
+            </div>
+          </div>
+
+          <div class="row g-3 align-items-end mt-1">
+            <div class="col-md-6">
+              <label class="form-label">Сетевой интерфейс</label>
+
+              <!-- netIface: dropdown как "Режим" -->
+              <input type="hidden" id="netIface" value="">
+              <div class="dropdown">
+                <button id="netIfaceBtn" class="btn btn-ghost dropdown-toggle w-100 text-start" data-bs-toggle="dropdown">
+                  Выберите интерфейс
+                </button>
+                <ul id="netIfaceMenu" class="dropdown-menu w-100"></ul>
+              </div>
+
+              <div class="small-muted mt-1" id="netIfaceHint">Текущий интерфейс: —</div>
+              <div class="d-flex gap-2 mt-2">
+                <button class="btn btn-ghost" onclick="applyNetIface()">Применить</button>
+                <button class="btn btn-ghost" onclick="loadInterfaces()">Обновить интерфейсы</button>
+              </div>
+            </div>
+
+            <div class="col-md-3">
+              <button class="btn btn-ghost w-100" onclick="collectBaseline()">Накопить baseline (БД)</button>
+            </div>
+
+            <div class="col-md-3">
+              <div class="small-muted" id="runResult" style="padding: 10px 0;">Сводка последнего запуска: —</div>
+            </div>
           </div>
         </div>
       </div>
 
-      <!-- График по времени -->
-      <div class="col-md-6">
-        <div class="card">
-          <div class="card-header">Алерты по часам</div>
-          <div class="card-body">
-            <div id="timeChart" style="height: 320px;"></div>
+      <div class="row">
+        <!-- График по типам -->
+        <div class="col-md-6">
+          <div class="card">
+            <div class="card-header">Алерты по типам</div>
+            <div class="card-body">
+              <div id="typeChart" style="height: 320px;"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- График по времени -->
+        <div class="col-md-6">
+          <div class="card">
+            <div class="card-header">Динамика алертов (24ч)</div>
+            <div class="card-body">
+              <div id="timeChart" style="height: 320px;"></div>
+            </div>
           </div>
         </div>
       </div>
-    </div>
 
-    <div class="card mt-3">
-      <div class="card-header">Типы угроз (кратко)</div>
-      <div class="card-body small-muted">
-        <div>Suspicious Port — повторяющиеся обращения к типичным «рискованным» портам.</div>
-        <div>Port Scanning — множество уникальных портов от одного источника за короткий интервал.</div>
-        <div>DDoS — всплеск пакетов от большого числа источников к одной цели.</div>
-        <div>HTTP Anomaly — признаки подозрительных запросов (паттерны инъекций и т.п.).</div>
-        <div>Anomaly — аномалия по модели IsolationForest.</div>
-      </div>
-    </div>
+      <!-- Фильтры -->
+      <div class="card mt-4 card-filters">
+        <div class="card-body row g-3 align-items-end">
 
-    <!-- Фильтры -->
-    <div class="card mt-4">
-      <div class="card-body row g-3 align-items-end">
-        <div class="col-md-4">
-          <label class="form-label">Тип</label>
-          <select id="filterType" onchange="loadAlerts()" class="form-select">
-            <option value="">Все типы</option>
-          </select>
-        </div>
-        <div class="col-md-4">
-          <label class="form-label">Статус</label>
-          <select id="filterStatus" onchange="loadAlerts()" class="form-select">
-            <option value="">Все</option>
-            <option value="new">new</option>
-            <option value="acknowledged">acknowledged</option>
-            <option value="false_positive">false_positive</option>
-          </select>
-        </div>
-        <div class="col-md-4">
-          <label class="form-label">Мин. риск, %</label>
-          <input type="number" id="filterMinProb" class="form-control" value="0" min="0" max="100" step="1" onchange="loadAlerts()">
-        </div>
-      </div>
-    </div>
+          <!-- Тип: dropdown как "Режим" (динамический список) -->
+          <div class="col-md-4">
+            <label class="form-label">Тип</label>
+            <input type="hidden" id="filterType" value="">
+            <div class="dropdown">
+              <button id="filterTypeBtn" class="btn btn-ghost dropdown-toggle w-100 text-start" data-bs-toggle="dropdown">
+                Все типы
+              </button>
+              <ul id="filterTypeMenu" class="dropdown-menu w-100"></ul>
+            </div>
+          </div>
 
-    <!-- Таблица алертов -->
-    <div class="card mt-3">
-      <div class="card-header">Последние алерты</div>
-      <div class="card-body">
-        <div class="table-responsive">
-          <table class="table table-sm table-hover align-middle">
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>Время</th>
-                <th>Тип</th>
-                <th>Риск</th>
-                <th>IP</th>
-                <th>Статус</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody id="alertsTable"></tbody>
-          </table>
+          <!-- Статус: dropdown как "Режим" -->
+          <div class="col-md-4">
+            <label class="form-label">Статус</label>
+            <input type="hidden" id="filterStatus" value="">
+            <div class="dropdown">
+              <button id="filterStatusBtn" class="btn btn-ghost dropdown-toggle w-100 text-start" data-bs-toggle="dropdown">
+                Все
+              </button>
+              <ul id="filterStatusMenu" class="dropdown-menu w-100"></ul>
+            </div>
+          </div>
+
+          <div class="col-md-4">
+            <label class="form-label">Мин. риск, %</label>
+            <input type="number" id="filterMinProb" class="form-control" value="0" min="0" max="100" step="1" onchange="loadAlerts()">
+          </div>
+
         </div>
       </div>
+
+      <!-- Таблица алертов -->
+      <div class="card mt-3">
+        <div class="card-header">Последние алерты</div>
+        <div class="card-body">
+          <div class="table-responsive">
+            <table class="table table-sm table-hover align-middle">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Время</th>
+                  <th>Тип</th>
+                  <th>Риск</th>
+                  <th>IP</th>
+                  <th>Статус</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="alertsTable"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
     </div>
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
   <script>
+    const TIMEZONE = 'Europe/Moscow';
+    const TIMEZONE_LABEL = 'MSK (UTC+3)';
+    const FORMAT_FULL = new Intl.DateTimeFormat('ru-RU', {
+      timeZone: TIMEZONE,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    });
+    const FORMAT_CHART = new Intl.DateTimeFormat('ru-RU', {
+      timeZone: TIMEZONE,
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+
+    const ALERT_DESCRIPTIONS = {
+      'Suspicious Port': 'Повторяющиеся обращения к типичным «рискованным» портам.',
+      'Port Scanning': 'Много уникальных портов от одного источника за короткий интервал.',
+      'DDoS': 'Всплеск пакетов от множества источников к одной цели.',
+      'HTTP Anomaly': 'Подозрительные HTTP-паттерны (инъекции, traversal, и т.п.).',
+      'Anomaly': 'Нетипичное поведение трафика относительно привычного baseline (возможная новая/редкая угроза или сбой).'
+    };
+
+    // Маппинг стилей для типов (для цветных бейджей)
+    function typeBadgeClass(type) {
+      const t = String(type || '').toLowerCase();
+      if (t.includes('ddos')) return 'type-indigo';
+      if (t.includes('scan')) return 'type-blue';
+      if (t.includes('http')) return 'type-violet';
+      if (t.includes('anomaly')) return 'type-lav';
+      if (t.includes('suspicious')) return 'type-blue';
+      return 'type-neutral';
+    }
+
+    function statusBadgeClass(status) {
+      const s = String(status || '').toLowerCase();
+      if (s === 'acknowledged') return 'status-ack';
+      if (s === 'false_positive') return 'status-fp';
+      return 'status-new';
+    }
+
+    function escapeAttr(value) {
+      return String(value || '')
+        .replace(/&/g, '&amp;')
+        .replace(/\"/g, '&quot;');
+    }
+
+    function parseTs(ts) {
+      if (!ts) return null;
+      let raw = ts;
+      if (typeof raw === 'string' && !raw.match(/[zZ]|[+-]\d{2}:\d{2}$/)) {
+        raw = raw + 'Z';
+      }
+      const d = new Date(raw);
+      if (isNaN(d.getTime())) return null;
+      return d;
+    }
+
     function fmtTs(ts) {
-      if (!ts) return '—';
-      const d = new Date(ts);
-      if (isNaN(d.getTime())) return String(ts);
-      return d.toLocaleString();
+      const d = parseTs(ts);
+      if (!d) return '—';
+      return FORMAT_FULL.format(d);
     }
 
-    function badgeClassByStatus(status) {
-      if (status === 'acknowledged') return 'bg-success';
-      if (status === 'false_positive') return 'bg-secondary';
-      return 'bg-danger';
+    function fmtNow() {
+      return FORMAT_FULL.format(new Date());
     }
 
+    // ---------- Dropdown helpers ----------
+    function setButtonText(btnId, text) {
+      const btn = document.getElementById(btnId);
+      if (btn) btn.textContent = text;
+    }
+
+    // Run mode is unchanged
+    function setRunMode(mode) {
+      const input = document.getElementById('runMode');
+      if (input) input.value = mode;
+      setButtonText('runModeBtn', mode);
+    }
+
+    // Run model dropdown
+    function setRunModel(model) {
+      const input = document.getElementById('runModel');
+      if (input) input.value = model;
+      setButtonText('runModelBtn', model);
+    }
+
+    // Filter type dropdown
+    function setFilterType(type) {
+      const input = document.getElementById('filterType');
+      if (input) input.value = type || '';
+      setButtonText('filterTypeBtn', type ? type : 'Все типы');
+      loadAlerts();
+    }
+
+    // Filter status dropdown
+    function setFilterStatus(status) {
+      const input = document.getElementById('filterStatus');
+      if (input) input.value = status || '';
+      const label = status ? status : 'Все';
+      setButtonText('filterStatusBtn', label);
+      loadAlerts();
+    }
+
+    // Net iface dropdown
+    const IFACE_LABELS = {}; // value -> label
+    function setNetIface(value, label) {
+      const input = document.getElementById('netIface');
+      if (input) input.value = value || '';
+      setButtonText('netIfaceBtn', label || value || 'Выберите интерфейс');
+    }
+
+    function initStatusDropdown() {
+      const menu = document.getElementById('filterStatusMenu');
+      if (!menu) return;
+
+      menu.innerHTML = `
+        <li><a class="dropdown-item" href="#" onclick="setFilterStatus(''); return false;">Все</a></li>
+        <li><a class="dropdown-item" href="#" onclick="setFilterStatus('new'); return false;">new</a></li>
+        <li><a class="dropdown-item" href="#" onclick="setFilterStatus('acknowledged'); return false;">acknowledged</a></li>
+        <li><a class="dropdown-item" href="#" onclick="setFilterStatus('false_positive'); return false;">false_positive</a></li>
+      `;
+    }
+
+    // ---------- Plotly ----------
+    function plotlyBaseLayout() {
+      const grid = 'rgba(60,125,249,0.10)';        // #3C7DF9
+      const axis = 'rgba(234,240,255,0.80)';
+      const title = 'rgba(234,240,255,0.95)';
+      return {
+        paper_bgcolor: 'rgba(0,0,0,0)',
+        plot_bgcolor: 'rgba(0,0,0,0)',
+        font: { color: axis, family: 'Montserrat, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif' },
+        margin: { t: 40, l: 40, r: 10, b: 60 },
+        xaxis: {
+          gridcolor: grid,
+          zerolinecolor: 'rgba(19,24,243,0.12)',   // #1318F3
+          tickfont: { color: axis },
+          titlefont: { color: axis }
+        },
+        yaxis: {
+          gridcolor: grid,
+          zerolinecolor: 'rgba(19,24,243,0.12)',
+          tickfont: { color: axis },
+          titlefont: { color: axis },
+          rangemode: 'tozero'
+        },
+        title: { font: { color: title, size: 14 } }
+      };
+    }
+
+    // ---------- API actions ----------
     async function updateStatus(alertId, newStatus) {
       const res = await fetch(`/alerts/${alertId}/status`, {
         method: 'POST',
@@ -174,14 +946,14 @@
     }
 
     async function loadAlerts() {
-      const type = document.getElementById('filterType').value;
-      const status = document.getElementById('filterStatus').value;
-      const minProb = Number(document.getElementById('filterMinProb').value) / 100;
+      const type = (document.getElementById('filterType')?.value) || '';
+      const status = (document.getElementById('filterStatus')?.value) || '';
+      const minProb = Number(document.getElementById('filterMinProb')?.value || 0) / 100;
 
       const q = new URLSearchParams();
       if (type) q.set('type', type);
       if (status) q.set('status', status);
-      q.set('limit', '100');
+      q.set('limit', '500');
 
       const res = await fetch(`/alerts?${q.toString()}`);
       const alerts = await res.json();
@@ -197,24 +969,34 @@
       tbody.innerHTML = filtered.map(a => `
         <tr>
           <td class="mono">${a.id}</td>
-          <td>${fmtTs(a.timestamp)}</td>
-          <td><span class="badge bg-danger">${a.type}</span></td>
-          <td>${(Number(a.probability || 0) * 100).toFixed(1)}%</td>
+          <td class="mono">${fmtTs(a.timestamp)}</td>
+          <td>
+            <span class="badge type-badge ${typeBadgeClass(a.type)}"
+              title="${escapeAttr(ALERT_DESCRIPTIONS[a.type] || 'Описание недоступно')}">
+              ${a.type}
+            </span>
+          </td>
+          <td class="mono">${(Number(a.probability || 0) * 100).toFixed(1)}%</td>
           <td class="mono">${a.source_ip || '-'}</td>
-          <td><span class="badge ${badgeClassByStatus(a.status)}">${a.status}</span></td>
+          <td>
+            <span class="badge status-badge ${statusBadgeClass(a.status)}">${a.status}</span>
+          </td>
           <td>
             <div class="btn-group btn-group-sm" role="group">
-              <button class="btn btn-outline-success" onclick="updateStatus(${a.id}, 'acknowledged')">ACK</button>
-              <button class="btn btn-outline-secondary" onclick="updateStatus(${a.id}, 'false_positive')">False Positive</button>
+              <button class="btn btn-table btn-table-success" onclick="updateStatus(${a.id}, 'acknowledged')">ACK</button>
+              <button class="btn btn-table btn-table-secondary" onclick="updateStatus(${a.id}, 'false_positive')">False Positive</button>
             </div>
           </td>
         </tr>
       `).join('');
 
       updateCharts(filtered);
-      updateFilterOptions(alerts);
+      updateFilterTypeDropdown(alerts);
 
-      document.getElementById('lastRefresh').textContent = new Date().toLocaleString();
+      await refreshMonitorStatus();
+      await refreshTelegramStatus();
+
+      document.getElementById('lastRefresh').textContent = fmtNow();
     }
 
     function updateCharts(alerts) {
@@ -224,54 +1006,245 @@
         byType[t] = (byType[t] || 0) + 1;
       });
 
+      const typeEntries = Object.entries(byType).sort((a, b) => b[1] - a[1]);
+      const typeLabels = typeEntries.map(entry => entry[0]);
+      const typeCounts = typeEntries.map(entry => entry[1]);
+      const typeDescs = typeEntries.map(entry => ALERT_DESCRIPTIONS[entry[0]] || 'Описание недоступно');
+
+      const base1 = plotlyBaseLayout();
       Plotly.newPlot('typeChart', [{
-        x: Object.keys(byType),
-        y: Object.values(byType),
-        type: 'bar'
+        x: typeLabels,
+        y: typeCounts,
+        type: 'bar',
+        marker: {
+          color: 'rgba(60,125,249,0.70)',                // #3C7DF9
+          line: { color: 'rgba(19,24,243,0.85)', width: 1.4 } // #1318F3
+        },
+        customdata: typeDescs,
+        hovertemplate: '%{x}<br>%{customdata}<br>Alerts: %{y}<extra></extra>'
       }], {
-        title: 'Количество алертов по типам',
-        margin: { t: 40, l: 40, r: 10, b: 60 }
-      });
+        ...base1,
+        title: { text: 'Количество алертов по типам', font: { color: 'rgba(234,240,255,0.95)', size: 14 } }
+      }, { displayModeBar: false, responsive: true });
 
-      const byHour = {};
+      const now = new Date();
+      const windowHours = 24;
+      const binMinutes = 30;
+
+      const start = new Date(now.getTime() - windowHours * 60 * 60 * 1000);
+      const binMs = binMinutes * 60 * 1000;
+      const binCount = Math.floor((now - start) / binMs) + 1;
+
+      // уникальные X (ISO), но подписи будем рисовать только временем
+      const xISO = [];
+      const xTimeText = [];
+      const counts = new Array(binCount).fill(0);
+
+      const TIME_ONLY = new Intl.DateTimeFormat('ru-RU', { timeZone: TIMEZONE, hour: '2-digit', minute: '2-digit' });
+
+      for (let i = 0; i < binCount; i += 1) {
+        const d = new Date(start.getTime() + i * binMs);
+        xISO.push(d.toISOString());          // уникально
+        xTimeText.push(TIME_ONLY.format(d)); // красиво
+      }
+
       alerts.forEach(a => {
-        const d = new Date(a.timestamp);
-        if (isNaN(d.getTime())) return;
-        const h = d.getHours();
-        byHour[h] = (byHour[h] || 0) + 1;
+        const d = parseTs(a.timestamp);
+        if (!d) return;
+        if (d < start || d > now) return;
+        const idx = Math.floor((d - start) / binMs);
+        if (idx >= 0 && idx < counts.length) counts[idx] += 1;
       });
 
-      const hours = Object.keys(byHour)
-        .map(h => Number(h))
-        .sort((a, b) => a - b)
-        .map(h => h.toString());
+      // показывать подписи реже (например, раз в 2 часа = каждые 4 бина при 30 мин)
+      const step = 4;
+      const tickvals = xISO.filter((_, i) => i % step === 0);
+      const ticktext = xTimeText.filter((_, i) => i % step === 0);
+
+      const base2 = plotlyBaseLayout();
 
       Plotly.newPlot('timeChart', [{
-        x: hours,
-        y: hours.map(h => byHour[h]),
-        type: 'bar'
+        x: xISO,
+        y: counts,
+        type: 'scatter',
+        mode: 'lines+markers',
+        line: { color: 'rgba(19,24,243,0.92)', width: 3.0 },
+        fill: 'tozeroy',
+        fillcolor: 'rgba(88,4,164,0.08)',
+        marker: {
+          size: 6,
+          color: 'rgba(60,125,249,0.92)',
+          line: { color: 'rgba(207,157,255,0.45)', width: 1 }
+        },
+        hovertemplate: '%{x}<br>Alerts: %{y}<extra></extra>'
       }], {
-        title: 'Алерты по часам',
-        xaxis: { title: 'Часы' },
-        yaxis: { title: 'Количество' },
-        margin: { t: 40, l: 40, r: 10, b: 60 }
-      });
+        ...base2,
+        title: { text: 'Динамика алертов (24ч)', font: { color: 'rgba(234,240,255,0.95)', size: 14 } },
+        xaxis: {
+          ...base2.xaxis,
+          type: 'category',
+          tickmode: 'array',
+          tickvals,
+         ticktext,
+          title: { text: 'Время (MSK)', font: { color: 'rgba(234,240,255,0.78)' } }
+        },
+        yaxis: { ...base2.yaxis, title: { text: 'Количество', font: { color: 'rgba(234,240,255,0.78)' } } }
+      }, { displayModeBar: false, responsive: true });
+      }
+
+    function updateFilterTypeDropdown(alerts) {
+      const types = [...new Set(alerts.map(a => a.type))].filter(Boolean).sort();
+      const menu = document.getElementById('filterTypeMenu');
+      const current = document.getElementById('filterType')?.value || '';
+
+      if (!menu) return;
+
+      let html = `<li><a class="dropdown-item" href="#" onclick="setFilterType(''); return false;">Все типы</a></li>`;
+      html += types.map(t => `<li><a class="dropdown-item" href="#" onclick="setFilterType('${escapeAttr(t)}'); return false;">${t}</a></li>`).join('');
+      menu.innerHTML = html;
+
+      // если выбранный тип пропал — сброс
+      if (current && !types.includes(current)) {
+        setFilterType('');
+      } else {
+        setButtonText('filterTypeBtn', current ? current : 'Все типы');
+      }
     }
 
-    function updateFilterOptions(alerts) {
-      const types = [...new Set(alerts.map(a => a.type))].filter(Boolean).sort();
-      const select = document.getElementById('filterType');
+    async function refreshMonitorStatus() {
+      try {
+        const res = await fetch('/monitor/status');
+        if (!res.ok) return;
+        const data = await res.json();
 
-      const current = select.value;
-      select.innerHTML = '<option value="">Все типы</option>' +
-        types.map(t => `<option value="${t}">${t}</option>`).join('');
-      if (types.includes(current)) select.value = current;
+        const badge = document.getElementById('monitorState');
+        const queue = document.getElementById('monitorQueue');
+        const batch = document.getElementById('monitorBatch');
+        const ifaceHint = document.getElementById('netIfaceHint');
+
+        if (badge) {
+          badge.textContent = data.running ? 'ON' : 'OFF';
+          // цвет границы у badge оставляем как base; просто слегка отличим текстом
+          badge.style.borderColor = data.running ? 'rgba(46,242,167,.70)' : 'rgba(255,255,255,.22)';
+        }
+        if (queue) queue.textContent = data.queue_size ?? '-';
+        if (batch) {
+          const batchSize = (data.batch_size !== undefined && data.batch_size !== null) ? data.batch_size : '-';
+          const flushSec = (data.flush_sec !== undefined && data.flush_sec !== null) ? data.flush_sec : '-';
+          batch.textContent = batchSize + ' / ' + flushSec + 's';
+        }
+        if (ifaceHint) ifaceHint.textContent = `Текущий интерфейс: ${data.iface || '-'}`;
+
+        // синхронизируем выбранный iface (если уже загружены интерфейсы)
+        if (data.iface) {
+          const label = IFACE_LABELS[data.iface] || data.iface;
+          setNetIface(data.iface, label);
+        }
+      } catch (err) {}
+    }
+
+    async function startMonitor() {
+      const res = await fetch('/monitor/start', { method: 'POST' });
+      if (!res.ok) {
+        const t = await res.text();
+        alert(`Monitor start failed: ${t}`);
+        return;
+      }
+      await refreshMonitorStatus();
+    }
+
+    async function stopMonitor() {
+      const res = await fetch('/monitor/stop', { method: 'POST' });
+      if (!res.ok) {
+        const t = await res.text();
+        alert(`Monitor stop failed: ${t}`);
+        return;
+      }
+      await refreshMonitorStatus();
+    }
+
+    async function loadInterfaces() {
+      const menu = document.getElementById('netIfaceMenu');
+      if (!menu) return;
+
+      menu.innerHTML = `<li><span class="dropdown-item" style="opacity:.8;">Загрузка...</span></li>`;
+      try {
+        const res = await fetch('/interfaces');
+        if (!res.ok) return;
+        const data = await res.json();
+        const items = Array.isArray(data) ? data : [];
+
+        const opts = items.map(item => {
+          if (typeof item === 'string') return { value: item, label: item };
+          const name = item.name || item.description || item.guid || 'unknown';
+          const desc = item.description ? ` — ${item.description}` : '';
+          const ips = Array.isArray(item.ips) && item.ips.length ? ` [${item.ips.join(', ')}]` : '';
+          const value = item.name || name;
+          return { value, label: `${name}` };
+        });
+
+        // обновим map
+        for (const o of opts) IFACE_LABELS[o.value] = o.label;
+
+        menu.innerHTML = opts.map(o =>
+          `<li><a class="dropdown-item" href="#" onclick="setNetIface('${escapeAttr(o.value)}','${escapeAttr(o.label)}'); return false;">${o.label}</a></li>`
+        ).join('');
+
+        // если ничего не выбрано — оставим кнопку как "Выберите интерфейс"
+        // если уже выбран — покажем label
+        const current = document.getElementById('netIface')?.value || '';
+        if (current && IFACE_LABELS[current]) {
+          setNetIface(current, IFACE_LABELS[current]);
+        }
+        await refreshMonitorStatus();
+      } catch (err) {}
+    }
+
+    async function applyNetIface() {
+      const iface = document.getElementById('netIface')?.value || '';
+      if (!iface) {
+        alert('Выберите интерфейс.');
+        return;
+      }
+      const res = await fetch('/settings/interface', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ iface: iface, persist: true })
+      });
+      if (!res.ok) {
+        const t = await res.text();
+        alert(`Ошибка сохранения интерфейса (${res.status}): ${t}`);
+        return;
+      }
+      await refreshMonitorStatus();
+    }
+
+    async function refreshTelegramStatus() {
+      const badge = document.getElementById('telegramStatus');
+      if (!badge) return;
+      try {
+        const res = await fetch('/telegram/status');
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.ready) {
+          badge.textContent = 'ON';
+          badge.style.borderColor = 'rgba(46,242,167,.70)';
+          return;
+        }
+        if (data.enabled === false) {
+          badge.textContent = 'OFF';
+          badge.style.borderColor = 'rgba(255,255,255,.22)';
+          return;
+        }
+        badge.textContent = 'NOT CONFIG';
+        badge.style.borderColor = 'rgba(255,204,102,.55)';
+      } catch (err) {}
     }
 
     async function runAnalysis() {
-      const file = document.getElementById('fileInput').files[0];
-      const mode = document.getElementById('runMode').value;
-      const model = document.getElementById('runModel').value;
+      const file = document.getElementById('fileInput')?.files?.[0];
+      const mode = document.getElementById('runMode')?.value || 'real';
+      const model = document.getElementById('runModel')?.value || 'rf';
 
       const url = `/analyze?mode=${encodeURIComponent(mode)}&model=${encodeURIComponent(model)}`;
 
@@ -305,8 +1278,21 @@
         return;
       }
       document.getElementById('runResult').textContent =
-        `Базовая выборка: rows=${data.rows}, csv=${data.csv}`;
+        `Baseline (traffic_logs): captured_rows=${data.rows}, saved_rows=${data.saved_rows ?? '-'}, baseline_pool_rows=${data.baseline_pool_rows ?? '-'}, anomaly_retrained=${data.anomaly_retrained ?? false}, csv=${data.csv}`;
     }
+
+    // Init
+    document.getElementById('timeZoneLabel').textContent = TIMEZONE_LABEL;
+
+    initStatusDropdown();
+    setRunMode('real');
+    setRunModel('rf');
+    setFilterType('');
+    setFilterStatus('');
+
+    loadInterfaces();
+    refreshTelegramStatus();
+    refreshMonitorStatus();
 
     setInterval(loadAlerts, 30000);
     loadAlerts();

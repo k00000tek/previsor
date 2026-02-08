@@ -1,44 +1,83 @@
 @startuml
-title Диаграмма последовательности PreVisor
+title Диаграмма последовательности PreVisor (актуальная)
 
 actor "Пользователь" as User
-participant "Flask UI\n(Веб-интерфейс)" as Flask
-participant "Авто-монитор\n(app.py)" as Mon
+participant "Браузер / UI\n(/dashboard)" as UI
+participant "PreVisor (Flask)\n(app.py)" as App
+participant "Монитор\n(app.py)" as Mon
+participant "Collector Thread" as Col
+participant "Processor Thread" as Proc
+participant "Queue\n(in-memory)" as Q
 participant "Сборщик данных\n(DataCollector)" as DC
-participant "Предобработка\n(Preprocessor)" as PP
-participant "Анализатор\n(Analyzer + Heuristics + AnomalyDetector)" as AN
-participant "База данных\n(DB)" as DB
-participant "Threat Intelligence\n(API)" as EXT
-participant "Telegram" as TG
+participant "Threat Pipeline\n(modules.pipeline)" as Pipe
+participant "База данных\n(SQLite)" as DB
+participant "Baseline Manager\n(modules.baseline_manager)" as BM
+participant "Threat Intelligence\n(AbuseIPDB)" as EXT
+participant "Telegram Bot API" as TG
+participant "Telegram Polling\n(app.py)" as Poll
 
-loop Каждые N секунд (PREVISOR_AUTO_MONITOR_INTERVAL)
-  Mon -> DC : collect_traffic()
-  DC -> PP : preprocess_data(raw_logs)
-  PP -> AN : analyze(features)
-  AN -> EXT : check_ip(ip) (опционально)
-  AN -> AN : combine_signals()
+User -> UI : openDashboard()
+UI -> App : GET /monitor/status
+App --> UI : status
 
-  alt Риск выше порога
-    AN -> DB : insertAlert(alert)
-    AN -> TG : send_alert()
-  else Нет угроз
-    AN -> DB : insertLog(traffic_logs)
-  end
+opt Старт мониторинга
+  User -> UI : Нажать "Старт"
+  UI -> App : POST /monitor/start
+  App -> Mon : start()
+  Mon -> Col : start()
+  Mon -> Proc : start()
 end
 
-User -> Flask : openDashboard()
-Flask -> DB : getAlerts(filters)
-DB --> Flask : list_alerts
-Flask --> User : renderDashboard(alerts)
+loop Непрерывный мониторинг
+  Col -> DC : collect_traffic()
+  DC -> Q : enqueue(batch)
+  Proc -> Q : dequeue(batch)
+  Proc -> Pipe : run(mode=real, input_df)
+  Pipe -> DB : insert traffic_logs (raw)
+  Pipe -> EXT : check_ip(ip) (опционально)
+  Pipe --> Proc : result.alerts
+  Proc -> App : _handle_pipeline_result()
+  App -> DB : insert alerts (alert==1)
+  App -> TG : sendMessage (alerts/summary)
+  App -> BM : maybe_train_anomaly_model_from_db()
+  BM -> DB : select baseline candidates
+end
 
-opt Ручной запуск анализа
-  User -> Flask : triggerAnalysis()
-  Flask -> DC : collect_traffic() (или файл)
-  DC -> PP : preprocess_data()
-  PP -> AN : analyze(features)
-  AN -> DB : insertAlert(alert)
-  AN -> TG : send_alert()
-  Flask --> User : showNewAlert()
+opt Разовый анализ
+  User -> UI : Нажать "Разовый анализ"
+  UI -> App : POST /analyze
+  App -> DC : collect_traffic() / read file
+  App -> Pipe : run(mode=...)
+  Pipe -> DB : insert traffic_logs (raw)
+  Pipe --> App : result.alerts
+  App -> DB : insert alerts (alert==1)
+  App -> TG : sendMessage (если есть)
+  App -> BM : maybe_train_anomaly_model_from_db()
+  UI <-- App : обновление UI
+end
+
+opt Стоп мониторинга
+  User -> UI : Нажать "Стоп"
+  UI -> App : POST /monitor/stop
+  App -> Mon : stop()
+  Mon -> Col : stop()
+  Mon -> Proc : stop()
+end
+
+opt Feedback: False Positive
+  User -> UI : отметить алерт false_positive
+  UI -> App : POST /alerts/{id}/status
+  App -> DB : update alerts.status=false_positive
+  App -> BM : maybe_train_anomaly_model_from_db()
+end
+
+opt Команды Telegram (polling)
+  User -> TG : /start, /selectchat (ЛС/группа)
+  Poll -> TG : getUpdates
+  TG --> Poll : update(message)
+  Poll -> App : _handle_telegram_update()
+  App -> TG : sendMessage (menu/confirm)
+  App -> App : (опц.) сохранить TELEGRAM_CHAT_ID в .env
 end
 
 @enduml
