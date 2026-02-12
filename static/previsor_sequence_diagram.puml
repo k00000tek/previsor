@@ -1,20 +1,20 @@
 @startuml
-title Диаграмма последовательности PreVisor (актуальная)
+title Диаграмма последовательности PreVisor
 
 actor "Пользователь" as User
-participant "Браузер / UI\n(/dashboard)" as UI
-participant "PreVisor (Flask)\n(app.py)" as App
-participant "Монитор\n(app.py)" as Mon
+participant "UI (Dashboard)" as UI
+participant "PreVisor Flask App" as App
+participant "Runtime Monitor" as Mon
 participant "Collector Thread" as Col
 participant "Processor Thread" as Proc
-participant "Queue\n(in-memory)" as Q
-participant "Сборщик данных\n(DataCollector)" as DC
-participant "Threat Pipeline\n(modules.pipeline)" as Pipe
-participant "База данных\n(SQLite)" as DB
-participant "Baseline Manager\n(modules.baseline_manager)" as BM
-participant "Threat Intelligence\n(AbuseIPDB)" as EXT
+queue "Queue" as Q
+participant "Data Collector" as DC
+participant "Threat Pipeline" as Pipe
+database "SQLite" as DB
+participant "Baseline Manager" as BM
+participant "Threat Intelligence" as EXT
 participant "Telegram Bot API" as TG
-participant "Telegram Polling\n(app.py)" as Poll
+participant "Telegram Polling" as Poll
 
 User -> UI : openDashboard()
 UI -> App : GET /monitor/status

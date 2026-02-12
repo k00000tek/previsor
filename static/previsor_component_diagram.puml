@@ -1,85 +1,62 @@
 @startuml
 title Диаграмма компонентов PreVisor
-
 skinparam componentStyle rectangle
-skinparam rectangle {
-  BackgroundColor White
-  BorderColor #777
-  FontColor Black
-}
-skinparam package {
-  BackgroundColor #F9F9F9
-  BorderColor #999
-}
-skinparam database {
-  BackgroundColor #FFF9F2
-  BorderColor #CCAA77
-}
-skinparam cloud {
-  BackgroundColor #F5FAFF
-  BorderColor #8FB6E6
-}
 
 package "Core System" {
-  [Threat Pipeline\n(modules.pipeline)]
-  [Data Collector\n(modules.data_collector)]
-  [Preprocessor\n(modules.preprocessor)]
-  [Heuristics\n(modules.heuristics)]
-
-  package "Threat Analysis" {
-    [Classifier Analyzer\n(modules.analyzer)]
-    [Anomaly Detector\n(modules.anomaly_detector)]
-    [API Integration\n(utils.api_integration)]
-  }
-
-  [Baseline Manager\n(modules.baseline_manager)]
+  [Threat Pipeline]
+  [Data Collector]
+  [Preprocessor]
+  [Heuristics]
+  [Classifier]
+  [Anomaly Detector]
+  [API Integration]
+  [Baseline Manager]
 }
 
 package "Presentation Layer" {
-  [Flask Web App\n(app.py, templates/dashboard.html)]
+  [Web App]
 }
 
-package "Runtime Monitor (app.py)" {
+package "Runtime Monitor" {
   [Collector Thread]
   [Processor Thread]
-  [In-Memory Queue\n(queue.Queue)]
-  [Telegram Polling Thread]
+  [Queue]
+  [Telegram Polling]
 }
 
 database "Data Storage" {
-  [SQLite DB\n(db/runtime/previsor.db)]
+  [SQLite]
 }
 
-cloud "External Services (Optional)" {
-  [Threat Intelligence API\n(AbuseIPDB)]
-  [Telegram Bot API\n(api.telegram.org)]
+cloud "External Services" {
+  [Threat Intelligence]
+  [Telegram Bot]
 }
 
-' === Связи ===
-[Collector Thread] --> [Data Collector\n(modules.data_collector)] : capture traffic
-[Data Collector\n(modules.data_collector)] --> [In-Memory Queue\n(queue.Queue)] : raw batch
-[In-Memory Queue\n(queue.Queue)] --> [Processor Thread] : dequeue batch
-[Processor Thread] --> [Threat Pipeline\n(modules.pipeline)] : batch analysis
+' Connections
+[Collector Thread] --> [Data Collector] : collect
+[Data Collector] --> [Queue] : enqueue
+[Queue] --> [Processor Thread] : dequeue
+[Processor Thread] --> [Threat Pipeline] : analyse
 
-[Threat Pipeline\n(modules.pipeline)] --> [Preprocessor\n(modules.preprocessor)] : feature matrix
-[Threat Pipeline\n(modules.pipeline)] --> [Heuristics\n(modules.heuristics)] : raw rows
-[Threat Pipeline\n(modules.pipeline)] --> [Classifier Analyzer\n(modules.analyzer)] : classification
-[Threat Pipeline\n(modules.pipeline)] --> [Anomaly Detector\n(modules.anomaly_detector)] : anomalies
+[Threat Pipeline] --> [Preprocessor] : preprocess
+[Threat Pipeline] --> [Heuristics] : heuristics
+[Threat Pipeline] --> [Classifier] : classify
+[Threat Pipeline] --> [Anomaly Detector] : detect
 
-[Threat Pipeline\n(modules.pipeline)] --> [SQLite DB\n(db/runtime/previsor.db)] : traffic_logs
-[API Integration\n(utils.api_integration)] --> [SQLite DB\n(db/runtime/previsor.db)] : ip_cache
+[Threat Pipeline] --> [SQLite] : logs
+[API Integration] --> [SQLite] : cache
 
-[Flask Web App\n(app.py, templates/dashboard.html)] --> [SQLite DB\n(db/runtime/previsor.db)] : alerts/logs CRUD
-[Flask Web App\n(app.py, templates/dashboard.html)] --> [Threat Pipeline\n(modules.pipeline)] : manual analysis
-[Flask Web App\n(app.py, templates/dashboard.html)] --> [Collector Thread] : start/stop monitor
-[Flask Web App\n(app.py, templates/dashboard.html)] --> [Baseline Manager\n(modules.baseline_manager)] : retrain IF from DB
-[Baseline Manager\n(modules.baseline_manager)] --> [SQLite DB\n(db/runtime/previsor.db)] : read traffic_logs + alert statuses
+[Web App] --> [SQLite] : CRUD
+[Web App] --> [Threat Pipeline] : manual run
+[Web App] --> [Collector Thread] : monitor control
+[Web App] --> [Baseline Manager] : retrain IF
+[Baseline Manager] --> [SQLite] : baseline
 
-[Classifier Analyzer\n(modules.analyzer)] --> [API Integration\n(utils.api_integration)] : check IP reputation
-[API Integration\n(utils.api_integration)] --> [Threat Intelligence API\n(AbuseIPDB)] : HTTP requests
+[Classifier] --> [API Integration] : check IP
+[API Integration] --> [Threat Intelligence] : HTTP
 
-[Flask Web App\n(app.py, templates/dashboard.html)] --> [Telegram Bot API\n(api.telegram.org)] : sendMessage (alerts)
-[Telegram Polling Thread] --> [Telegram Bot API\n(api.telegram.org)] : getUpdates (commands)
-[Telegram Polling Thread] --> [Flask Web App\n(app.py, templates/dashboard.html)] : handle /start,/selectchat,...
-
+[Web App] --> [Telegram Bot] : alert
+[Telegram Polling] --> [Telegram Bot] : get updates
+[Telegram Polling] --> [Web App] : handle commands
 @enduml

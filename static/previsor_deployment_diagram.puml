@@ -1,46 +1,28 @@
 @startuml
 title Диаграмма развертывания PreVisor
 
-skinparam node {
-  BackgroundColor White
-  BorderColor #666
-  FontColor #111
+node "Client Device\n(Клиентская машина)" as client {
+  component "Server App\n(Сервер приложения)" as server{
+    component "Monitoring Core" as monitor
+    component "Flask Web App" as app
+    component "Telegram polling" as poll
+    component "Modules" as modules
+  }
+  database "SQLite" as db
 }
 
-skinparam artifact {
-  BackgroundColor #F9F9F9
-  BorderColor #999
+cloud "External Services\n(Внешние сервисы)" as external {
+    [Threat Intelligence API]
+    [Telegram Bot API]
 }
 
-node "ПК пользователя\n(Windows)" as Client {
-    artifact "Браузер\n(Browser)" as Browser
-    artifact "Flask-приложение\n(app.py)" as FlaskApp
-    artifact "Непрерывный монитор\n(collector + processor)" as Monitor
-    artifact "Telegram polling\n(commands)" as TgPoll
-    artifact "Модули анализа\n(modules/*)" as AnalyzerMods
-    artifact "Baseline manager\n(modules.baseline_manager)" as BaselineMgr
-    artifact "SQLite DB\n(db/runtime/previsor.db)" as DB
-    artifact "Runtime артефакты моделей\n(models/runtime/*)" as Artifacts
-}
+cloud "Браузер" as browser
 
-cloud "Внешние сервисы" as Cloud {
-    artifact "AbuseIPDB\nHTTP API" as TI
-    artifact "Telegram Bot" as Notif
-}
+cloud "Telegram" as tg
 
-Browser --> FlaskApp : HTTP
-FlaskApp --> Monitor : start/stop/status
-FlaskApp --> AnalyzerMods : анализ/предобработка
-FlaskApp --> BaselineMgr : retrain IF (из БД)
-TgPoll --> FlaskApp : обработка /start,/selectchat,...
-Monitor --> AnalyzerMods : batch analysis
-FlaskApp --> DB : SQL
-AnalyzerMods --> DB : traffic_logs / ip_cache
-FlaskApp --> DB : alerts
-BaselineMgr --> DB : baseline candidates
-BaselineMgr --> Artifacts : isolation_forest.pkl + stats
-AnalyzerMods --> TI : репутация IP (опционально)
-FlaskApp --> Notif : уведомления/команды
-TgPoll --> Notif : getUpdates
+browser --> app : HTTP Requests
+tg --> poll : Bot Commands
+server --> db : SQL Queries
+client --> external : External API Сalls
 
 @enduml

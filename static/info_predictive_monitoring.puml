@@ -1,0 +1,25 @@
+@startuml
+
+skinparam rectangle {
+  BackgroundColor White
+  BorderColor #666
+  FontColor Black
+}
+skinparam arrowColor #444
+
+rectangle "Источники данных\n(инфраструктура, сеть,\nприложения, СЗИ)" as Sources
+rectangle "Инфраструктурный мониторинг\n(метрики, доступность)" as Infra
+rectangle "Сбор и анализ логов\n(централизация, поиск)" as Logs
+rectangle "SIEM\n(нормализация и корреляция\nсобытий безопасности)" as Siem
+rectangle "Интеллектуальная аналитика\n(ML + аномалии + эвристики\n+ TI-контекст)" as ML
+rectangle "Реагирование\n(инциденты, уведомления,\nпроцессы SOC)" as Response
+
+Sources --> Infra
+Sources --> Logs
+Sources --> Siem
+Infra --> Siem : события/алерты
+Logs --> Siem : события/контекст
+Siem --> ML : признаки/события
+ML --> Response : приоритизация/риск
+Siem --> Response : инциденты
+@enduml

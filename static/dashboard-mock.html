@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PreVisor Dashboard</title>
 
-  <link rel="icon" href="static/favicon.ico" type="image/x-icon" />
+  <link rel="icon" href="favicon.ico" type="image/x-icon" />
 
   <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
@@ -21,15 +21,15 @@
       --ink:#EAF0FF;
       --muted:rgba(234,240,255,.72);
 
-      /* Palette accents (по вашему списку) */
+      /* Palette accents */
       --violet:#5804A4;
       --lavender:#CF9DFF;
       --indigo:#1318F3;
       --blue:#3C7DF9;
 
       /* Ultra-dark glass */
-      --cardA: rgba(0,0,0,.18);  /* почти прозрачный */
-      --cardB: rgba(0,0,0,.12);  /* ещё чуть прозрачнее */
+      --cardA: rgba(0,0,0,.18);
+      --cardB: rgba(0,0,0,.12);
       --cardHeader: rgba(0,0,0,.18);
 
       --strokeSoft: rgba(60,125,249,.16);
@@ -48,7 +48,7 @@
       margin:0;
       font-family: "Montserrat", system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
       color: var(--ink);
-      background: var(--bg); /* строго #000 */
+      background: var(--bg);
       overflow-x:hidden;
       padding: 26px 0 40px;
     }
@@ -90,7 +90,7 @@
       min-width: 0;
     }
 
-    /* LOGO: крупнее + неон-рамка */
+    /* LOGO */
     .logoFrame{
       width: 78px;
       height: 78px;
@@ -216,7 +216,7 @@
     }
     .btn-ghost:active{ transform: translateY(0px) scale(.99); }
 
-    /* Cards: ПОЧТИ прозрачные */
+    /* Cards */
     .card{
       border-radius: var(--radius2) !important;
       border: 1px solid transparent !important;
@@ -539,7 +539,7 @@
           <div class="logoFrame">
             <img
               class="logo"
-              src="static/logo.png"
+              src="logo.png"
               alt="PreVisor logo"
               onerror="this.closest('.logoFrame').style.display='none'"
             />
@@ -583,7 +583,7 @@
         </div>
 
         <div class="btn-group">
-          <button class="btn btn-neon" onclick="startMonitor()">Запуск</button>
+          <button class="btn btn-neon" onclick="startMonitor()">Старт</button>
           <button class="btn btn-ghost" onclick="stopMonitor()">Стоп</button>
           <button class="btn btn-ghost" onclick="loadAlerts()">Обновить</button>
         </div>
@@ -715,7 +715,6 @@
       <div class="card mt-4 card-filters">
         <div class="card-body row g-3 align-items-end">
 
-          <!-- Тип: dropdown как "Режим" (динамический список) -->
           <div class="col-md-4">
             <label class="form-label">Тип</label>
             <input type="hidden" id="filterType" value="">
@@ -727,7 +726,6 @@
             </div>
           </div>
 
-          <!-- Статус: dropdown как "Режим" -->
           <div class="col-md-4">
             <label class="form-label">Статус</label>
             <input type="hidden" id="filterStatus" value="">
@@ -775,528 +773,642 @@
 
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
   <script>
-    const TIMEZONE = 'Europe/Moscow';
-    const TIMEZONE_LABEL = 'MSK (UTC+3)';
-    const FORMAT_FULL = new Intl.DateTimeFormat('ru-RU', {
-      timeZone: TIMEZONE,
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit'
-    });
-    const FORMAT_CHART = new Intl.DateTimeFormat('ru-RU', {
-      timeZone: TIMEZONE,
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
+      const TIMEZONE = 'Europe/Moscow';
+      const TIMEZONE_LABEL = 'MSK (UTC+3)';
 
-    const ALERT_DESCRIPTIONS = {
-      'Suspicious Port': 'Повторяющиеся обращения к типичным «рискованным» портам.',
-      'Port Scanning': 'Много уникальных портов от одного источника за короткий интервал.',
-      'DDoS': 'Всплеск пакетов от множества источников к одной цели.',
-      'HTTP Anomaly': 'Подозрительные HTTP-паттерны (инъекции, traversal, и т.п.).',
-      'Anomaly': 'Нетипичное поведение трафика относительно привычного baseline (возможная новая/редкая угроза или сбой).'
-    };
+      const FORMAT_FULL = new Intl.DateTimeFormat('ru-RU', {
+        timeZone: TIMEZONE,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+      });
 
-    // Маппинг стилей для типов (для цветных бейджей)
-    function typeBadgeClass(type) {
-      const t = String(type || '').toLowerCase();
-      if (t.includes('ddos')) return 'type-indigo';
-      if (t.includes('scan')) return 'type-blue';
-      if (t.includes('http')) return 'type-violet';
-      if (t.includes('anomaly')) return 'type-lav';
-      if (t.includes('suspicious')) return 'type-blue';
-      return 'type-neutral';
-    }
+      const TIME_ONLY = new Intl.DateTimeFormat('ru-RU', {
+        timeZone: TIMEZONE,
+        hour: '2-digit',
+        minute: '2-digit'
+      });
 
-    function statusBadgeClass(status) {
-      const s = String(status || '').toLowerCase();
-      if (s === 'acknowledged') return 'status-ack';
-      if (s === 'false_positive') return 'status-fp';
-      return 'status-new';
-    }
+      const TIME_HOVER = new Intl.DateTimeFormat('ru-RU', {
+        timeZone: TIMEZONE,
+        day: '2-digit',
+        month: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
 
-    function escapeAttr(value) {
-      return String(value || '')
-        .replace(/&/g, '&amp;')
-        .replace(/\"/g, '&quot;');
-    }
+      // Для генерации суточного паттерна именно в MSK
+      const HM_FMT = new Intl.DateTimeFormat('en-GB', {
+        timeZone: TIMEZONE,
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false
+      });
 
-    function parseTs(ts) {
-      if (!ts) return null;
-      let raw = ts;
-      if (typeof raw === 'string' && !raw.match(/[zZ]|[+-]\d{2}:\d{2}$/)) {
-        raw = raw + 'Z';
+      function hourFloatTZ(date) {
+        const parts = HM_FMT.formatToParts(date);
+        const hh = Number(parts.find(p => p.type === 'hour')?.value ?? 0);
+        const mm = Number(parts.find(p => p.type === 'minute')?.value ?? 0);
+        return hh + (mm / 60);
       }
-      const d = new Date(raw);
-      if (isNaN(d.getTime())) return null;
-      return d;
-    }
 
-    function fmtTs(ts) {
-      const d = parseTs(ts);
-      if (!d) return '—';
-      return FORMAT_FULL.format(d);
-    }
-
-    function fmtNow() {
-      return FORMAT_FULL.format(new Date());
-    }
-
-    // ---------- Dropdown helpers ----------
-    function setButtonText(btnId, text) {
-      const btn = document.getElementById(btnId);
-      if (btn) btn.textContent = text;
-    }
-
-    // Run mode is unchanged
-    function setRunMode(mode) {
-      const input = document.getElementById('runMode');
-      if (input) input.value = mode;
-      setButtonText('runModeBtn', mode);
-    }
-
-    // Run model dropdown
-    function setRunModel(model) {
-      const input = document.getElementById('runModel');
-      if (input) input.value = model;
-      setButtonText('runModelBtn', model);
-    }
-
-    // Filter type dropdown
-    function setFilterType(type) {
-      const input = document.getElementById('filterType');
-      if (input) input.value = type || '';
-      setButtonText('filterTypeBtn', type ? type : 'Все типы');
-      loadAlerts();
-    }
-
-    // Filter status dropdown
-    function setFilterStatus(status) {
-      const input = document.getElementById('filterStatus');
-      if (input) input.value = status || '';
-      const label = status ? status : 'Все';
-      setButtonText('filterStatusBtn', label);
-      loadAlerts();
-    }
-
-    // Net iface dropdown
-    const IFACE_LABELS = {}; // value -> label
-    function setNetIface(value, label) {
-      const input = document.getElementById('netIface');
-      if (input) input.value = value || '';
-      setButtonText('netIfaceBtn', label || value || 'Выберите интерфейс');
-    }
-
-    function initStatusDropdown() {
-      const menu = document.getElementById('filterStatusMenu');
-      if (!menu) return;
-
-      menu.innerHTML = `
-        <li><a class="dropdown-item" href="#" onclick="setFilterStatus(''); return false;">Все</a></li>
-        <li><a class="dropdown-item" href="#" onclick="setFilterStatus('new'); return false;">new</a></li>
-        <li><a class="dropdown-item" href="#" onclick="setFilterStatus('acknowledged'); return false;">acknowledged</a></li>
-        <li><a class="dropdown-item" href="#" onclick="setFilterStatus('false_positive'); return false;">false_positive</a></li>
-      `;
-    }
-
-    // ---------- Plotly ----------
-    function plotlyBaseLayout() {
-      const grid = 'rgba(60,125,249,0.10)';        // #3C7DF9
-      const axis = 'rgba(234,240,255,0.80)';
-      const title = 'rgba(234,240,255,0.95)';
-      return {
-        paper_bgcolor: 'rgba(0,0,0,0)',
-        plot_bgcolor: 'rgba(0,0,0,0)',
-        font: { color: axis, family: 'Montserrat, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif' },
-        margin: { t: 40, l: 40, r: 10, b: 60 },
-        xaxis: {
-          gridcolor: grid,
-          zerolinecolor: 'rgba(19,24,243,0.12)',   // #1318F3
-          tickfont: { color: axis },
-          titlefont: { color: axis }
-        },
-        yaxis: {
-          gridcolor: grid,
-          zerolinecolor: 'rgba(19,24,243,0.12)',
-          tickfont: { color: axis },
-          titlefont: { color: axis },
-          rangemode: 'tozero'
-        },
-        title: { font: { color: title, size: 14 } }
+      const ALERT_DESCRIPTIONS = {
+        'Suspicious Port': 'Повторяющиеся обращения к типичным «рискованным» портам.',
+        'Port Scanning': 'Много уникальных портов от одного источника за короткий интервал.',
+        'DDoS': 'Всплеск пакетов от множества источников к одной цели.',
+        'HTTP Anomaly': 'Подозрительные HTTP-паттерны (инъекции, traversal, и т.п.).',
+        'Anomaly': 'Нетипичное поведение трафика относительно привычного baseline (возможная новая/редкая угроза или сбой).'
       };
-    }
 
-    // ---------- API actions ----------
-    async function updateStatus(alertId, newStatus) {
-      const res = await fetch(`/alerts/${alertId}/status`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: newStatus })
-      });
-      if (!res.ok) {
-        const t = await res.text();
-        alert(`Ошибка обновления статуса (${res.status}): ${t}`);
-        return;
+      // --- deterministic pseudo-random (so mock looks stable) ---
+      function mulberry32(seed) {
+        return function() {
+          let t = seed += 0x6D2B79F5;
+          t = Math.imul(t ^ (t >>> 15), t | 1);
+          t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+          return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        };
       }
-      await loadAlerts();
-    }
+      const rnd = mulberry32(1337);
 
-    async function loadAlerts() {
-      const type = (document.getElementById('filterType')?.value) || '';
-      const status = (document.getElementById('filterStatus')?.value) || '';
-      const minProb = Number(document.getElementById('filterMinProb')?.value || 0) / 100;
+      // --- mock state ---
+      const MOCK = {
+        monitor: {
+          running: true,
+          queue_size: 0,
+          batch_size: 200,
+          flush_sec: 5,
+          iface: 'Беспроводная сеть'
+        },
+        telegram: {
+          enabled: true,
+          ready: true
+        },
+        interfaces: [
+          { name: 'Беспроводная сеть', description: 'Intel(R) Wi-Fi 6 AX200 160MHz', ips: ['192.168.1.114'] },
+          { name: 'Ethernet', description: 'Realtek PCIe GBE Family Controller', ips: ['192.168.1.22'] },
+          { name: 'VPN', description: 'WireGuard Tunnel', ips: ['10.0.0.2'] },
+          { name: 'Loopback', description: 'Software Loopback', ips: ['127.0.0.1'] }
+        ],
+        alerts: []
+      };
 
-      const q = new URLSearchParams();
-      if (type) q.set('type', type);
-      if (status) q.set('status', status);
-      q.set('limit', '500');
+      function escapeAttr(value) {
+        return String(value || '')
+          .replace(/&/g, '&amp;')
+          .replace(/\"/g, '&quot;');
+      }
 
-      const res = await fetch(`/alerts?${q.toString()}`);
-      const alerts = await res.json();
+      function parseTs(ts) {
+        if (!ts) return null;
+        let raw = ts;
+        if (typeof raw === 'string' && !raw.match(/[zZ]|[+-]\d{2}:\d{2}$/)) raw = raw + 'Z';
+        const d = new Date(raw);
+        if (isNaN(d.getTime())) return null;
+        return d;
+      }
 
-      const filtered = alerts.filter(a => {
-        if (!isNaN(minProb) && minProb > 0) {
-          return Number(a.probability || 0) >= minProb;
+      function fmtTs(ts) {
+        const d = parseTs(ts);
+        if (!d) return '—';
+        return FORMAT_FULL.format(d);
+      }
+
+      function fmtNow() {
+        return FORMAT_FULL.format(new Date());
+      }
+
+      function clamp01(x) { return Math.max(0, Math.min(1, x)); }
+
+      function pickWeighted(options) {
+        const sum = options.reduce((s, o) => s + o.w, 0);
+        let r = rnd() * sum;
+        for (const o of options) {
+          r -= o.w;
+          if (r <= 0) return o.v;
         }
-        return true;
-      });
-
-      const tbody = document.getElementById('alertsTable');
-      tbody.innerHTML = filtered.map(a => `
-        <tr>
-          <td class="mono">${a.id}</td>
-          <td class="mono">${fmtTs(a.timestamp)}</td>
-          <td>
-            <span class="badge type-badge ${typeBadgeClass(a.type)}"
-              title="${escapeAttr(ALERT_DESCRIPTIONS[a.type] || 'Описание недоступно')}">
-              ${a.type}
-            </span>
-          </td>
-          <td class="mono">${(Number(a.probability || 0) * 100).toFixed(1)}%</td>
-          <td class="mono">${a.source_ip || '-'}</td>
-          <td>
-            <span class="badge status-badge ${statusBadgeClass(a.status)}">${a.status}</span>
-          </td>
-          <td>
-            <div class="btn-group btn-group-sm" role="group">
-              <button class="btn btn-table btn-table-success" onclick="updateStatus(${a.id}, 'acknowledged')">ACK</button>
-              <button class="btn btn-table btn-table-secondary" onclick="updateStatus(${a.id}, 'false_positive')">False Positive</button>
-            </div>
-          </td>
-        </tr>
-      `).join('');
-
-      updateCharts(filtered);
-      updateFilterTypeDropdown(alerts);
-
-      await refreshMonitorStatus();
-      await refreshTelegramStatus();
-
-      document.getElementById('lastRefresh').textContent = fmtNow();
-    }
-
-    function updateCharts(alerts) {
-      const byType = {};
-      alerts.forEach(a => {
-        const t = a.type || 'Unknown';
-        byType[t] = (byType[t] || 0) + 1;
-      });
-
-      const typeEntries = Object.entries(byType).sort((a, b) => b[1] - a[1]);
-      const typeLabels = typeEntries.map(entry => entry[0]);
-      const typeCounts = typeEntries.map(entry => entry[1]);
-      const typeDescs = typeEntries.map(entry => ALERT_DESCRIPTIONS[entry[0]] || 'Описание недоступно');
-
-      const base1 = plotlyBaseLayout();
-      Plotly.newPlot('typeChart', [{
-        x: typeLabels,
-        y: typeCounts,
-        type: 'bar',
-        marker: {
-          color: 'rgba(60,125,249,0.70)',                // #3C7DF9
-          line: { color: 'rgba(19,24,243,0.85)', width: 1.4 } // #1318F3
-        },
-        customdata: typeDescs,
-        hovertemplate: '%{x}<br>%{customdata}<br>Alerts: %{y}<extra></extra>'
-      }], {
-        ...base1,
-        title: { text: 'Количество алертов по типам', font: { color: 'rgba(234,240,255,0.95)', size: 14 } }
-      }, { displayModeBar: false, responsive: true });
-
-      const now = new Date();
-      const windowHours = 24;
-      const binMinutes = 30;
-
-      const start = new Date(now.getTime() - windowHours * 60 * 60 * 1000);
-      const binMs = binMinutes * 60 * 1000;
-      const binCount = Math.floor((now - start) / binMs) + 1;
-
-      // уникальные X (ISO), но подписи будем рисовать только временем
-      const xISO = [];
-      const xTimeText = [];
-      const counts = new Array(binCount).fill(0);
-
-      const TIME_ONLY = new Intl.DateTimeFormat('ru-RU', { timeZone: TIMEZONE, hour: '2-digit', minute: '2-digit' });
-
-      for (let i = 0; i < binCount; i += 1) {
-        const d = new Date(start.getTime() + i * binMs);
-        xISO.push(d.toISOString());          // уникально
-        xTimeText.push(TIME_ONLY.format(d)); // красиво
+        return options[options.length - 1].v;
       }
 
-      alerts.forEach(a => {
-        const d = parseTs(a.timestamp);
-        if (!d) return;
-        if (d < start || d > now) return;
-        const idx = Math.floor((d - start) / binMs);
-        if (idx >= 0 && idx < counts.length) counts[idx] += 1;
-      });
-
-      // показывать подписи реже (например, раз в 2 часа = каждые 4 бина при 30 мин)
-      const step = 4;
-      const tickvals = xISO.filter((_, i) => i % step === 0);
-      const ticktext = xTimeText.filter((_, i) => i % step === 0);
-
-      const base2 = plotlyBaseLayout();
-
-      Plotly.newPlot('timeChart', [{
-        x: xISO,
-        y: counts,
-        type: 'scatter',
-        mode: 'lines+markers',
-        line: { color: 'rgba(19,24,243,0.92)', width: 3.0, shape: 'spline', smoothing: 1.15 },
-        fill: 'tozeroy',
-        fillcolor: 'rgba(88,4,164,0.08)',
-        marker: {
-          size: 6,
-          color: 'rgba(60,125,249,0.92)',
-          line: { color: 'rgba(207,157,255,0.45)', width: 1 }
-        },
-        hovertemplate: '%{x}<br>Alerts: %{y}<extra></extra>'
-      }], {
-        ...base2,
-        title: { text: 'Динамика алертов за сутки', font: { color: 'rgba(234,240,255,0.95)', size: 14 } },
-        xaxis: {
-          ...base2.xaxis,
-          type: 'category',
-          tickmode: 'array',
-          tickvals,
-         ticktext,
-          title: { text: 'Время (MSK)', font: { color: 'rgba(234,240,255,0.78)' } }
-        },
-        yaxis: { ...base2.yaxis, title: { text: 'Количество', font: { color: 'rgba(234,240,255,0.78)' } } }
-      }, { displayModeBar: false, responsive: true });
+      function randomIp() {
+        const a = 10 + Math.floor(rnd() * 180);
+        const b = Math.floor(rnd() * 256);
+        const c = Math.floor(rnd() * 256);
+        const d = 1 + Math.floor(rnd() * 254);
+        return `${a}.${b}.${c}.${d}`;
       }
 
-    function updateFilterTypeDropdown(alerts) {
-      const types = [...new Set(alerts.map(a => a.type))].filter(Boolean).sort();
-      const menu = document.getElementById('filterTypeMenu');
-      const current = document.getElementById('filterType')?.value || '';
-
-      if (!menu) return;
-
-      let html = `<li><a class="dropdown-item" href="#" onclick="setFilterType(''); return false;">Все типы</a></li>`;
-      html += types.map(t => `<li><a class="dropdown-item" href="#" onclick="setFilterType('${escapeAttr(t)}'); return false;">${t}</a></li>`).join('');
-      menu.innerHTML = html;
-
-      // если выбранный тип пропал — сброс
-      if (current && !types.includes(current)) {
-        setFilterType('');
-      } else {
-        setButtonText('filterTypeBtn', current ? current : 'Все типы');
+      function gauss(x, mu, sigma) {
+        const z = (x - mu) / sigma;
+        return Math.exp(-0.5 * z * z);
       }
-    }
 
-    async function refreshMonitorStatus() {
-      try {
-        const res = await fetch('/monitor/status');
-        if (!res.ok) return;
-        const data = await res.json();
+      function seedMockAlerts() {
+        // 5 типов, без придуманных
+        const types = [
+          { v: 'Port Scanning', w: 22 },
+          { v: 'Suspicious Port', w: 21 },
+          { v: 'HTTP Anomaly', w: 20 },
+          { v: 'DDoS', w: 18 },
+          { v: 'Anomaly', w: 19 }
+        ];
 
+        const statusW = [
+          { v: 'new', w: 62 },
+          { v: 'acknowledged', w: 26 },
+          { v: 'false_positive', w: 12 }
+        ];
+
+        const now = new Date();
+        const windowHours = 24;
+        const binMinutes = 30;
+
+        const start = new Date(now.getTime() - windowHours * 60 * 60 * 1000);
+        const binMs = binMinutes * 60 * 1000;
+        const binCount = Math.floor((now - start) / binMs) + 1;
+
+        const alerts = [];
+        let idSeq = 1200;
+
+        for (let i = 0; i < binCount; i += 1) {
+          const binStart = new Date(start.getTime() + i * binMs);
+          const h = hourFloatTZ(binStart);
+
+          // 2 “дневных” пика + небольшой фон, + шум
+          let lam = 0.25
+            + 1.35 * gauss(h, 11.5, 3.0)
+            + 1.15 * gauss(h, 18.5, 3.2);
+
+          lam += (rnd() - 0.5) * 0.30;
+
+          // редкие всплески
+          if (rnd() < 0.06) lam += 4 + Math.floor(rnd() * 4);
+
+          const count = Math.max(0, Math.round(lam));
+
+          for (let j = 0; j < count; j += 1) {
+            const t = new Date(binStart.getTime() + rnd() * binMs);
+            const type = pickWeighted(types);
+            const status = pickWeighted(statusW);
+
+            let base = 0.30 + rnd() * 0.55;
+            if (type === 'DDoS') base = 0.70 + rnd() * 0.25;
+            if (type === 'Port Scanning') base = 0.55 + rnd() * 0.35;
+            if (status === 'false_positive') base = 0.18 + rnd() * 0.25;
+
+            alerts.push({
+              id: idSeq++,
+              timestamp: t.toISOString(),
+              type,
+              probability: clamp01(base),
+              source_ip: randomIp(),
+              status
+            });
+          }
+        }
+
+        alerts.sort((a, b) => (b.timestamp > a.timestamp ? 1 : -1));
+        MOCK.alerts = alerts;
+      }
+
+      // ---------- UI mappings ----------
+      function typeBadgeClass(type) {
+        const t = String(type || '').toLowerCase();
+        if (t.includes('ddos')) return 'type-indigo';
+        if (t.includes('scan')) return 'type-blue';
+        if (t.includes('http')) return 'type-violet';
+        if (t.includes('anomaly')) return 'type-lav';
+        if (t.includes('suspicious')) return 'type-blue';
+        return 'type-neutral';
+      }
+
+      function statusBadgeClass(status) {
+        const s = String(status || '').toLowerCase();
+        if (s === 'acknowledged') return 'status-ack';
+        if (s === 'false_positive') return 'status-fp';
+        return 'status-new';
+      }
+
+      // ---------- Dropdown helpers ----------
+      function setButtonText(btnId, text) {
+        const btn = document.getElementById(btnId);
+        if (btn) btn.textContent = text;
+      }
+
+      function setRunMode(mode) {
+        const input = document.getElementById('runMode');
+        if (input) input.value = mode;
+        setButtonText('runModeBtn', mode);
+      }
+
+      function setRunModel(model) {
+        const input = document.getElementById('runModel');
+        if (input) input.value = model;
+        setButtonText('runModelBtn', model);
+      }
+
+      function setFilterType(type) {
+        const input = document.getElementById('filterType');
+        if (input) input.value = type || '';
+        setButtonText('filterTypeBtn', type ? type : 'Все типы');
+        loadAlerts();
+      }
+
+      function setFilterStatus(status) {
+        const input = document.getElementById('filterStatus');
+        if (input) input.value = status || '';
+        const label = status ? status : 'Все';
+        setButtonText('filterStatusBtn', label);
+        loadAlerts();
+      }
+
+      const IFACE_LABELS = {};
+      function setNetIface(value, label) {
+        const input = document.getElementById('netIface');
+        if (input) input.value = value || '';
+        setButtonText('netIfaceBtn', label || value || 'Выберите интерфейс');
+      }
+
+      function initStatusDropdown() {
+        const menu = document.getElementById('filterStatusMenu');
+        if (!menu) return;
+
+        menu.innerHTML = `
+          <li><a class="dropdown-item" href="#" onclick="setFilterStatus(''); return false;">Все</a></li>
+          <li><a class="dropdown-item" href="#" onclick="setFilterStatus('new'); return false;">new</a></li>
+          <li><a class="dropdown-item" href="#" onclick="setFilterStatus('acknowledged'); return false;">acknowledged</a></li>
+          <li><a class="dropdown-item" href="#" onclick="setFilterStatus('false_positive'); return false;">false_positive</a></li>
+        `;
+      }
+
+      // ---------- Plotly ----------
+      function plotlyBaseLayout() {
+        const grid = 'rgba(60,125,249,0.10)';
+        const axis = 'rgba(234,240,255,0.80)';
+        const title = 'rgba(234,240,255,0.95)';
+        return {
+          paper_bgcolor: 'rgba(0,0,0,0)',
+          plot_bgcolor: 'rgba(0,0,0,0)',
+          font: { color: axis, family: 'Montserrat, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif' },
+          margin: { t: 40, l: 40, r: 10, b: 60 },
+          xaxis: {
+            gridcolor: grid,
+            zerolinecolor: 'rgba(19,24,243,0.12)',
+            tickfont: { color: axis },
+            titlefont: { color: axis }
+          },
+          yaxis: {
+            gridcolor: grid,
+            zerolinecolor: 'rgba(19,24,243,0.12)',
+            tickfont: { color: axis },
+            titlefont: { color: axis },
+            rangemode: 'tozero'
+          },
+          title: { font: { color: title, size: 14 } }
+        };
+      }
+
+      // ---------- MOCK actions ----------
+      function refreshTelegramStatus() {
+        const badge = document.getElementById('telegramStatus');
+        if (!badge) return;
+
+        if (!MOCK.telegram.enabled) {
+          badge.textContent = 'OFF';
+          badge.style.borderColor = 'rgba(255,255,255,.22)';
+          return;
+        }
+
+        if (MOCK.telegram.ready) {
+          badge.textContent = 'ON';
+          badge.style.borderColor = 'rgba(46,242,167,.70)';
+          return;
+        }
+
+        badge.textContent = 'NOT CONFIG';
+        badge.style.borderColor = 'rgba(255,204,102,.55)';
+      }
+
+      function refreshMonitorStatus() {
         const badge = document.getElementById('monitorState');
         const queue = document.getElementById('monitorQueue');
         const batch = document.getElementById('monitorBatch');
         const ifaceHint = document.getElementById('netIfaceHint');
 
         if (badge) {
-          badge.textContent = data.running ? 'ON' : 'OFF';
-          // цвет границы у badge оставляем как base; просто слегка отличим текстом
-          badge.style.borderColor = data.running ? 'rgba(46,242,167,.70)' : 'rgba(255,255,255,.22)';
+          badge.textContent = MOCK.monitor.running ? 'ON' : 'OFF';
+          badge.style.borderColor = MOCK.monitor.running ? 'rgba(46,242,167,.70)' : 'rgba(255,255,255,.22)';
         }
-        if (queue) queue.textContent = data.queue_size ?? '-';
+        if (queue) queue.textContent = MOCK.monitor.queue_size ?? '-';
+
         if (batch) {
-          const batchSize = (data.batch_size !== undefined && data.batch_size !== null) ? data.batch_size : '-';
-          const flushSec = (data.flush_sec !== undefined && data.flush_sec !== null) ? data.flush_sec : '-';
-          batch.textContent = batchSize + ' / ' + flushSec + 's';
+          const batchSize = (MOCK.monitor.batch_size ?? '-');
+          const flushSec = (MOCK.monitor.flush_sec ?? '-');
+          batch.textContent = `${batchSize} / ${flushSec}s`;
         }
-        if (ifaceHint) ifaceHint.textContent = `Текущий интерфейс: ${data.iface || '-'}`;
 
-        // синхронизируем выбранный iface (если уже загружены интерфейсы)
-        if (data.iface) {
-          const label = IFACE_LABELS[data.iface] || data.iface;
-          setNetIface(data.iface, label);
+        if (ifaceHint) ifaceHint.textContent = `Текущий интерфейс: ${MOCK.monitor.iface || '-'}`;
+
+        if (MOCK.monitor.iface) {
+          const label = IFACE_LABELS[MOCK.monitor.iface] || MOCK.monitor.iface;
+          setNetIface(MOCK.monitor.iface, label);
         }
-      } catch (err) {}
-    }
-
-    async function startMonitor() {
-      const res = await fetch('/monitor/start', { method: 'POST' });
-      if (!res.ok) {
-        const t = await res.text();
-        alert(`Monitor start failed: ${t}`);
-        return;
       }
-      await refreshMonitorStatus();
-    }
 
-    async function stopMonitor() {
-      const res = await fetch('/monitor/stop', { method: 'POST' });
-      if (!res.ok) {
-        const t = await res.text();
-        alert(`Monitor stop failed: ${t}`);
-        return;
+      function startMonitor() {
+        MOCK.monitor.running = true;
+        MOCK.monitor.queue_size = 8 + Math.floor(rnd() * 12);
+        refreshMonitorStatus();
       }
-      await refreshMonitorStatus();
-    }
 
-    async function loadInterfaces() {
-      const menu = document.getElementById('netIfaceMenu');
-      if (!menu) return;
+      function stopMonitor() {
+        MOCK.monitor.running = false;
+        MOCK.monitor.queue_size = 0;
+        refreshMonitorStatus();
+      }
 
-      menu.innerHTML = `<li><span class="dropdown-item" style="opacity:.8;">Загрузка...</span></li>`;
-      try {
-        const res = await fetch('/interfaces');
-        if (!res.ok) return;
-        const data = await res.json();
-        const items = Array.isArray(data) ? data : [];
+      function loadInterfaces() {
+        const menu = document.getElementById('netIfaceMenu');
+        if (!menu) return;
 
-        const opts = items.map(item => {
-          if (typeof item === 'string') return { value: item, label: item };
-          const name = item.name || item.description || item.guid || 'unknown';
-          const desc = item.description ? ` — ${item.description}` : '';
-          const ips = Array.isArray(item.ips) && item.ips.length ? ` [${item.ips.join(', ')}]` : '';
-          const value = item.name || name;
-          return { value, label: `${name}` };
+        const opts = MOCK.interfaces.map(item => {
+          const value = item.name || item.description || 'unknown';
+          const label = item.name || value; // только name
+          return { value, label };
         });
 
-        // обновим map
         for (const o of opts) IFACE_LABELS[o.value] = o.label;
 
         menu.innerHTML = opts.map(o =>
           `<li><a class="dropdown-item" href="#" onclick="setNetIface('${escapeAttr(o.value)}','${escapeAttr(o.label)}'); return false;">${o.label}</a></li>`
         ).join('');
 
-        // если ничего не выбрано — оставим кнопку как "Выберите интерфейс"
-        // если уже выбран — покажем label
-        const current = document.getElementById('netIface')?.value || '';
-        if (current && IFACE_LABELS[current]) {
-          setNetIface(current, IFACE_LABELS[current]);
+        if (!document.getElementById('netIface')?.value) {
+          setNetIface(MOCK.monitor.iface, IFACE_LABELS[MOCK.monitor.iface] || MOCK.monitor.iface);
         }
-        await refreshMonitorStatus();
-      } catch (err) {}
-    }
-
-    async function applyNetIface() {
-      const iface = document.getElementById('netIface')?.value || '';
-      if (!iface) {
-        alert('Выберите интерфейс.');
-        return;
       }
-      const res = await fetch('/settings/interface', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ iface: iface, persist: true })
-      });
-      if (!res.ok) {
-        const t = await res.text();
-        alert(`Ошибка сохранения интерфейса (${res.status}): ${t}`);
-        return;
-      }
-      await refreshMonitorStatus();
-    }
 
-    async function refreshTelegramStatus() {
-      const badge = document.getElementById('telegramStatus');
-      if (!badge) return;
-      try {
-        const res = await fetch('/telegram/status');
-        if (!res.ok) return;
-        const data = await res.json();
-        if (data.ready) {
-          badge.textContent = 'ON';
-          badge.style.borderColor = 'rgba(46,242,167,.70)';
+      function applyNetIface() {
+        const iface = document.getElementById('netIface')?.value || '';
+        if (!iface) {
+          alert('Выберите интерфейс.');
           return;
         }
-        if (data.enabled === false) {
-          badge.textContent = 'OFF';
-          badge.style.borderColor = 'rgba(255,255,255,.22)';
-          return;
+        MOCK.monitor.iface = iface;
+        refreshMonitorStatus();
+      }
+
+      function updateStatus(alertId, newStatus) {
+        const idx = MOCK.alerts.findIndex(a => Number(a.id) === Number(alertId));
+        if (idx === -1) return;
+        MOCK.alerts[idx].status = newStatus;
+        loadAlerts();
+      }
+
+      function runAnalysis() {
+        const mode = document.getElementById('runMode')?.value || 'real';
+        const model = document.getElementById('runModel')?.value || 'rf';
+
+        const newAlerts = 4 + Math.floor(rnd() * 4);
+        const now = Date.now();
+
+        for (let i = 0; i < newAlerts; i += 1) {
+          const t = now - i * (4 + Math.floor(rnd() * 9)) * 60 * 1000;
+          const type = pickWeighted([
+            { v: 'Port Scanning', w: 22 },
+            { v: 'Suspicious Port', w: 21 },
+            { v: 'HTTP Anomaly', w: 20 },
+            { v: 'DDoS', w: 18 },
+            { v: 'Anomaly', w: 19 }
+          ]);
+
+          MOCK.alerts.unshift({
+            id: 9000 + Math.floor(rnd() * 9000),
+            timestamp: new Date(t).toISOString(),
+            type,
+            probability: clamp01(0.35 + rnd() * 0.60),
+            source_ip: randomIp(),
+            status: 'new'
+          });
         }
-        badge.textContent = 'NOT CONFIG';
-        badge.style.borderColor = 'rgba(255,204,102,.55)';
-      } catch (err) {}
-    }
 
-    async function runAnalysis() {
-      const file = document.getElementById('fileInput')?.files?.[0];
-      const mode = document.getElementById('runMode')?.value || 'real';
-      const model = document.getElementById('runModel')?.value || 'rf';
+        MOCK.alerts.sort((a, b) => (b.timestamp > a.timestamp ? 1 : -1));
 
-      const url = `/analyze?mode=${encodeURIComponent(mode)}&model=${encodeURIComponent(model)}`;
+        const total = MOCK.alerts.length;
+        document.getElementById('runResult').textContent =
+          `mode=${mode}, model=${model}, new_alerts=${newAlerts}, total_alerts=${total}, telegram_sent=${MOCK.telegram.ready ? newAlerts : 0}`;
 
-      let res;
-      if (file) {
-        const form = new FormData();
-        form.append('file', file);
-        res = await fetch(url, { method: 'POST', body: form });
-      } else {
-        res = await fetch(url, { method: 'POST' });
+        loadAlerts();
       }
 
-      const data = await res.json();
-      if (!res.ok) {
-        alert(`Ошибка запуска: ${JSON.stringify(data)}`);
-        return;
+      function collectBaseline() {
+        const captured = 200;
+        const saved = 200;
+        const pool = 4200 + Math.floor(rnd() * 600);
+        const retrained = rnd() > 0.35;
+
+        document.getElementById('runResult').textContent =
+          `Baseline (traffic_logs): captured_rows=${captured}, saved_rows=${saved}, baseline_pool_rows=${pool}, anomaly_retrained=${retrained}, csv=baseline_${new Date().toISOString().slice(0,10)}.csv`;
       }
 
-      document.getElementById('runResult').textContent =
-        `mode=${data.mode}, model=${data.model}, new_alerts=${data.new_alerts}, total_alerts=${data.total_alerts}, telegram_sent=${data.telegram_sent}`;
+      // ---------- Render ----------
+      function loadAlerts() {
+        const type = (document.getElementById('filterType')?.value) || '';
+        const status = (document.getElementById('filterStatus')?.value) || '';
+        const minProb = Number(document.getElementById('filterMinProb')?.value || 0) / 100;
 
-      await loadAlerts();
-    }
+        let alerts = [...MOCK.alerts];
 
-    async function collectBaseline() {
-      const url = `/collect?mode=real&baseline=1&rows=200`;
-      const res = await fetch(url);
-      const data = await res.json();
-      if (!res.ok) {
-        alert(`Ошибка baseline-сбора: ${JSON.stringify(data)}`);
-        return;
+        if (type) alerts = alerts.filter(a => a.type === type);
+        if (status) alerts = alerts.filter(a => a.status === status);
+
+        if (!isNaN(minProb) && minProb > 0) {
+          alerts = alerts.filter(a => Number(a.probability || 0) >= minProb);
+        }
+
+        const TABLE_LIMIT = 18;
+        const rows = alerts.slice(0, TABLE_LIMIT);
+
+        const tbody = document.getElementById('alertsTable');
+        tbody.innerHTML = rows.map(a => `
+          <tr>
+            <td class="mono">${a.id}</td>
+            <td class="mono">${fmtTs(a.timestamp)}</td>
+            <td>
+              <span class="badge type-badge ${typeBadgeClass(a.type)}"
+                title="${escapeAttr(ALERT_DESCRIPTIONS[a.type] || 'Описание недоступно')}">
+                ${a.type}
+              </span>
+            </td>
+            <td class="mono">${(Number(a.probability || 0) * 100).toFixed(1)}%</td>
+            <td class="mono">${a.source_ip || '-'}</td>
+            <td>
+              <span class="badge status-badge ${statusBadgeClass(a.status)}">${a.status}</span>
+            </td>
+            <td>
+              <div class="btn-group btn-group-sm" role="group">
+                <button class="btn btn-table btn-table-success" onclick="updateStatus(${a.id}, 'acknowledged')">ACK</button>
+                <button class="btn btn-table btn-table-secondary" onclick="updateStatus(${a.id}, 'false_positive')">False Positive</button>
+              </div>
+            </td>
+          </tr>
+        `).join('');
+
+        updateCharts(alerts);
+        updateFilterTypeDropdown(MOCK.alerts);
+
+        refreshMonitorStatus();
+        refreshTelegramStatus();
+
+        const last = document.getElementById('lastRefresh');
+        if (last) last.textContent = fmtNow();
       }
-      document.getElementById('runResult').textContent =
-        `Baseline (traffic_logs): captured_rows=${data.rows}, saved_rows=${data.saved_rows ?? '-'}, baseline_pool_rows=${data.baseline_pool_rows ?? '-'}, anomaly_retrained=${data.anomaly_retrained ?? false}, csv=${data.csv}`;
-    }
 
-    // Init
-    document.getElementById('timeZoneLabel').textContent = TIMEZONE_LABEL;
+      function updateCharts(alerts) {
+        // --- by type ---
+        const byType = {};
+        alerts.forEach(a => {
+          const t = a.type || 'Unknown';
+          byType[t] = (byType[t] || 0) + 1;
+        });
 
-    initStatusDropdown();
-    setRunMode('real');
-    setRunModel('rf');
-    setFilterType('');
-    setFilterStatus('');
+        // сортировка по убыванию
+        const typeEntries = Object.entries(byType).sort((a, b) => b[1] - a[1]);
+        const typeLabels = typeEntries.map(entry => entry[0]);
+        const typeCounts = typeEntries.map(entry => entry[1]);
+        const typeDescs = typeEntries.map(entry => ALERT_DESCRIPTIONS[entry[0]] || 'Описание недоступно');
 
-    loadInterfaces();
-    refreshTelegramStatus();
-    refreshMonitorStatus();
+        const base1 = plotlyBaseLayout();
+        Plotly.newPlot('typeChart', [{
+          x: typeLabels,
+          y: typeCounts,
+          type: 'bar',
+          marker: {
+            color: 'rgba(60,125,249,0.70)',
+            line: { color: 'rgba(19,24,243,0.85)', width: 1.4 }
+          },
+          customdata: typeDescs,
+          hovertemplate: '%{x}<br>%{customdata}<br>Alerts: %{y}<extra></extra>'
+        }], {
+          ...base1,
+          title: { text: 'Количество алертов по типам', font: { color: 'rgba(234,240,255,0.95)', size: 14 } }
+        }, { displayModeBar: false, responsive: true });
 
-    setInterval(loadAlerts, 30000);
-    loadAlerts();
+        // --- time (24h, 30min bins), show only time labels but keep unique x via ISO ---
+        const now = new Date();
+        const windowHours = 24;
+        const binMinutes = 30;
+
+        const start = new Date(now.getTime() - windowHours * 60 * 60 * 1000);
+        const binMs = binMinutes * 60 * 1000;
+        const binCount = Math.floor((now - start) / binMs) + 1;
+
+        const xISO = [];
+        const xTimeText = [];
+        const xHoverText = [];
+        const counts = new Array(binCount).fill(0);
+
+        for (let i = 0; i < binCount; i += 1) {
+          const d = new Date(start.getTime() + i * binMs);
+          xISO.push(d.toISOString());
+          xTimeText.push(TIME_ONLY.format(d));
+          xHoverText.push(TIME_HOVER.format(d));
+        }
+
+        alerts.forEach(a => {
+          const d = parseTs(a.timestamp);
+          if (!d) return;
+          if (d < start || d > now) return;
+          const idx = Math.floor((d - start) / binMs);
+          if (idx >= 0 && idx < counts.length) counts[idx] += 1;
+        });
+
+        // ticks: every 2 hours (step=4 for 30min bins)
+        const step = 4;
+        const tickvals = xISO.filter((_, i) => i % step === 0);
+        const ticktext = xTimeText.filter((_, i) => i % step === 0);
+
+        const base2 = plotlyBaseLayout();
+        Plotly.newPlot('timeChart', [{
+          x: xISO,
+          y: counts,
+          type: 'scatter',
+          mode: 'lines+markers',
+          line: {
+            color: 'rgba(19,24,243,0.92)',
+            width: 3.0,
+            shape: 'spline',
+            smoothing: 1.15
+          },
+          fill: 'tozeroy',
+          fillcolor: 'rgba(88,4,164,0.08)',
+          marker: {
+            size: 5,
+            color: 'rgba(60,125,249,0.92)',
+            line: { color: 'rgba(207,157,255,0.45)', width: 1 }
+          },
+          customdata: xHoverText,
+          hovertemplate: '%{customdata}<br>Alerts: %{y}<extra></extra>'
+        }], {
+          ...base2,
+          title: { text: 'Динамика алертов за сутки', font: { color: 'rgba(234,240,255,0.95)', size: 14 } },
+          xaxis: {
+            ...base2.xaxis,
+            type: 'category',
+            tickmode: 'array',
+            tickvals: tickvals,
+            ticktext: ticktext,
+            title: { text: 'Время (MSK)', font: { color: 'rgba(234,240,255,0.78)' } }
+          },
+          yaxis: { ...base2.yaxis, title: { text: 'Количество', font: { color: 'rgba(234,240,255,0.78)' } } }
+        }, { displayModeBar: false, responsive: true });
+      }
+
+      function updateFilterTypeDropdown(allAlerts) {
+        const types = [...new Set(allAlerts.map(a => a.type))].filter(Boolean).sort();
+        const menu = document.getElementById('filterTypeMenu');
+        const current = document.getElementById('filterType')?.value || '';
+
+        if (!menu) return;
+
+        let html = `<li><a class="dropdown-item" href="#" onclick="setFilterType(''); return false;">Все типы</a></li>`;
+        html += types.map(t => `<li><a class="dropdown-item" href="#" onclick="setFilterType('${escapeAttr(t)}'); return false;">${t}</a></li>`).join('');
+        menu.innerHTML = html;
+
+        if (current && !types.includes(current)) {
+          setFilterType('');
+        } else {
+          setButtonText('filterTypeBtn', current ? current : 'Все типы');
+        }
+      }
+
+      // ---------- init ----------
+      document.getElementById('timeZoneLabel').textContent = TIMEZONE_LABEL;
+
+      initStatusDropdown();
+      setRunMode('real');
+      setRunModel('rf');
+      setFilterType('');
+      setFilterStatus('');
+
+      seedMockAlerts();
+      loadInterfaces();
+
+      refreshTelegramStatus();
+      refreshMonitorStatus();
+
+      loadAlerts();
+
+      setInterval(() => {
+        if (MOCK.monitor.running) {
+          const drift = (rnd() > 0.5 ? 1 : -1) * (rnd() > 0.7 ? 2 : 1);
+          MOCK.monitor.queue_size = Math.max(0, (MOCK.monitor.queue_size || 0) + drift);
+        }
+        loadAlerts();
+      }, 30000);
   </script>
 </body>
 </html>
