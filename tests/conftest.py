@@ -59,7 +59,7 @@ def test_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     # Упрощаем параллельность sklearn/joblib для стабильных тестов в Windows-среде.
     monkeypatch.setenv("PREVISOR_SKLEARN_N_JOBS", "1")
 
-    # На всякий случай — “старые” имена переменных, если где-то остались:
+    # Обратная совместимость: старые имена переменных окружения.
     monkeypatch.setenv("DATA_DIR", str(data_dir))
     monkeypatch.setenv("DB_PATH", str(db_dir / "previsor.db"))
     monkeypatch.setenv("MODELS_DIR", str(models_dir))

@@ -26,12 +26,11 @@ entity "alerts" as Alerts {
   * id : INTEGER <<PK>>
   --
   timestamp       : DATETIME
-  source_ip       : VARCHAR <<FK>>
+  source_ip       : VARCHAR
   alert_type      : VARCHAR
   probability     : FLOAT
   status          : VARCHAR
-  detection_source: VARCHAR
-  traffic_log_id  : INTEGER <<FK>>
+  traffic_log_id  : INTEGER
 }
 
 entity "traffic_logs" as TrafficLogs {
@@ -51,11 +50,12 @@ entity "traffic_logs" as TrafficLogs {
 }
 
 ' === Связи ===
-IPCache ||--o{ Alerts : "1 : N\n(ip → alerts)"
-TrafficLogs ||--o{ Alerts : "0..1 : N\n(log → alerts)"
+IPCache "0..1" -- "0..*" Alerts : "alerts.source_ip -> ip_cache.ip"
+TrafficLogs "0..1" -- "0..*" Alerts : "alerts.traffic_log_id -> traffic_logs.id"
 
 ' Пояснение:
-' - ip_cache.ip      ↔ alerts.source_ip
-' - traffic_logs.id  ↔ alerts.traffic_log_id
+' - Связи логические (в ORM/SQLite внешние ключи не заданы).
+' - ip_cache.ip      <-> alerts.source_ip
+' - traffic_logs.id  <-> alerts.traffic_log_id
 
 @enduml

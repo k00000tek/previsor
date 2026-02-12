@@ -260,7 +260,7 @@ def preprocess_data(
             joblib.dump(artifacts.label_encoder, paths["label_encoder"])
             logger.info("Сохранён label_encoder: %s", paths["label_encoder"])
         else:
-            # В inference НИКОГДА не fit. Если encoder нет — просто не кодируем.
+            # В inference fit не выполняется. Если label_encoder отсутствует — кодирование пропускаем.
             if artifacts.label_encoder is None:
                 logger.warning("label_encoder отсутствует — label encoding пропущен (inference)")
             else:

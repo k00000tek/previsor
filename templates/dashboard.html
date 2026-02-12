@@ -1125,7 +1125,7 @@
 
         if (badge) {
           badge.textContent = data.running ? 'ON' : 'OFF';
-          // цвет границы у badge оставляем как base; просто слегка отличим текстом
+          // Цвет границы у badge остаётся базовым; состояние показываем оттенком.
           badge.style.borderColor = data.running ? 'rgba(46,242,167,.70)' : 'rgba(255,255,255,.22)';
         }
         if (queue) queue.textContent = data.queue_size ?? '-';

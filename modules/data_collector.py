@@ -68,7 +68,7 @@ def _maybe_seed() -> None:
         np.random.seed(seed)
         Faker.seed(seed)
     except Exception:
-        # Если seed не число — просто игнорируем.
+        # Если seed не удаётся привести к int — игнорируем.
         return
 
 
@@ -219,7 +219,7 @@ def collect_real_traffic(
                 "http_method": http_method,
                 "host": http_host,
                 "url": http_url,
-                # В real метки нет → ставим "Normal Traffic", чтобы не падал LabelEncoder в inference
+                # В real режиме истинной метки нет; используем "Normal Traffic" для совместимости inference.
                 "Attack Type": "Normal Traffic",
             }
         )

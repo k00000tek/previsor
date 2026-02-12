@@ -359,7 +359,7 @@ class Analyzer:
         try:
             classes = getattr(self.model, "classes_", None)
             if classes is not None and len(classes) > 0:
-                # Если classes_ строковые, а предсказание — индекс/значение, просто приводим к строке
+                # Если classes_ строковые, а предсказание — индекс/значение, приводим к строке.
                 return str(encoded)
         except Exception:
             pass

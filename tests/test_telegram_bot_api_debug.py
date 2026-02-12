@@ -13,8 +13,8 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-# ВНИМАНИЕ: это интеграционный тест (нужна сеть + валидный TELEGRAM_BOT_TOKEN).
-# По умолчанию он не запускается, чтобы не было неожиданных запросов к Telegram.
+# Интеграционный тест: требуется сеть и валидный TELEGRAM_BOT_TOKEN.
+# По умолчанию отключён, чтобы избежать сетевых запросов к Telegram.
 if not _env_bool("PREVISOR_RUN_TELEGRAM_DEBUG", False):
     pytest.skip("Telegram debug test disabled (set PREVISOR_RUN_TELEGRAM_DEBUG=true)", allow_module_level=True)
 

@@ -2,27 +2,24 @@
 title Диаграмма развертывания PreVisor
 
 node "Client Device\n(Клиентская машина)" as client {
-  component "Server App\n(Сервер приложения)" as server{
-    component "Monitoring Core" as monitor
-    component "Flask Web App" as app
-    component "Telegram polling" as poll
-    component "Modules" as modules
+  component "PreVisor Server\n(Сервер приложения)" as server {
+    component "Flask Web App"
+    component "Monitoring Core"
   }
   database "SQLite" as db
 }
 
-cloud "External Services\n(Внешние сервисы)" as external {
-    [Threat Intelligence API]
-    [Telegram Bot API]
-}
-
 cloud "Браузер" as browser
-
 cloud "Telegram" as tg
 
-browser --> app : HTTP Requests
-tg --> poll : Bot Commands
+cloud "External Services\n(Внешние сервисы)" as external{
+  component "Telegram Bot API" as tgapi
+  component "Threat Intelligence API" as ti
+}
+
+browser --> server : HTTP Requests
 server --> db : SQL Queries
-client --> external : External API Сalls
+server --> external : External API Calls (HTTPS)
+tg --> tgapi : Bot Commands
 
 @enduml
