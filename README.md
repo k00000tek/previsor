@@ -84,6 +84,58 @@ Baseline берётся из БД (`traffic_logs`), поэтому runtime‑CSV
 - `GET /telegram/status`
 - `GET /traffic_logs/<id>` — детальная запись по трафику для алерта (через `traffic_log_id`)
 
+## Структура проекта
+```text
+previsor/
+  app.py                - Flask-приложение: API, дашборд, мониторинг (threads/queue), Telegram-команды
+  config.py             - конфигурация и дефолты (env), пути к данным/моделям
+  requirements.txt      - зависимости Python
+  .env.example          - пример минимальной конфигурации
+  pytest.ini            - настройки pytest для текущего окружения
+
+  modules/              - ядро системы
+    database.py         - SQLite схема и функции доступа (alerts, traffic_logs, ip_cache)
+    data_collector.py   - сбор трафика (real) и источники demo/test/dataset
+    preprocessor.py     - предобработка и feature engineering (train/inference)
+    analyzer.py         - классификация угроз (RF/XGB), расчёт риска, TI-обогащение
+    heuristics.py       - эвристические детекторы и поддержка эмуляции
+    anomaly_detector.py - детектор аномалий (IsolationForest) и baseline-статистика
+    baseline_manager.py - baseline из БД и авто-обучение/дообучение IF
+    pipeline.py         - единый пайплайн: collect -> preprocess -> detect -> alerts
+
+  utils/                - инфраструктурные модули
+    notifications.py    - Telegram: отправка уведомлений, polling/webhook утилиты
+    api_integration.py  - Threat Intelligence (AbuseIPDB) + кэширование в БД
+    download_data.py    - скачивание датасетов через Kaggle CLI (формирование data/samples)
+    process_data.py     - подготовка processed-датасетов (data/runtime/datasets)
+
+  templates/            - HTML-шаблоны
+    dashboard.html      - дашборд (UI, управление мониторингом, настройки)
+
+  static/               - статические файлы и диаграммы
+    previsor_*_diagram.* - PlantUML диаграммы (puml + png)
+    previsor_er_diagram.* - ER-диаграмма (puml + png)
+    info_*.puml          - справочные диаграммы для ВКР
+
+  tests/                - тесты (pytest)
+    conftest.py         - фикстуры и изоляция runtime в .tests_tmp
+    test_app_endpoints.py
+    test_preprocessor.py
+    test_analyzer_inference.py
+    test_telegram_commands_unit.py
+    test_telegram_bot_api_debug.py
+
+  docs/                 - эксплуатационная документация и материалы к защите
+  scripts/              - CLI-скрипты обучения/диагностики
+  data/                 - sample/runtime CSV и processed датасеты
+  db/                   - runtime SQLite БД (db/runtime/previsor.db)
+  models/               - модели и артефакты (pretrained/ и runtime/)
+  notebooks/            - исследовательские ноутбуки (EDA)
+  results/              - сохранённые результаты прогонов
+  docx/                 - материалы ВКР (задание/текст)
+```
+Локальные директории окружения (`.venv/`, `__pycache__/`, `.pytest_cache/`, `.idea/`) в структуру проекта не входят.
+
 ## Доп. документы
 - `docs/defense_pack_ru.md` — чек‑лист подготовки к защите.
 - `docs/powershell_scenarios.md` — сценарии PowerShell.
